@@ -158,7 +158,11 @@ export function verifyQuote(
   }
   const expected = stepCost(provider, step);
   if (!Number.isSafeInteger(req.amount) || req.amount < 0 || req.amount > expected) {
-    return { ok: false, reason: "overquote", detail: `quoted ${req.amount} micros, list price ${expected}` };
+    return {
+      ok: false,
+      reason: "overquote",
+      detail: `quoted ${fmt(req.amount)}, list price ${fmt(expected)} (${req.amount} vs ${expected} micros)`,
+    };
   }
   return { ok: true };
 }

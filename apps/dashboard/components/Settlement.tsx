@@ -13,6 +13,7 @@ export function Reconciliation({ summary }: { summary: RunSummary }) {
           {summary.reconciled ? "✓ Every dollar accounted for" : "✗ Mismatch"}
         </span>
       </div>
+      <div className="table-wrap">
       <table>
         <thead>
           <tr>
@@ -46,6 +47,7 @@ export function Reconciliation({ summary }: { summary: RunSummary }) {
           })}
         </tbody>
       </table>
+      </div>
       <p className="small muted">
         Float {fmt(summary.totals.floatDeposited)} deposited, {fmt(summary.totals.floatWithdrawn)} withdrawn unused. Invariant check:{" "}
         {summary.violations.length ? summary.violations.join("; ") : "0 violations"}.
@@ -68,6 +70,7 @@ export function Receipts({ summary }: { summary: RunSummary }) {
               </h3>
               <span className={`chip chip-${j.status === "completed" ? "done" : j.status}`}>{j.status === "completed" ? "done" : j.status.replace("_", "-")}</span>
             </header>
+            <div className="table-wrap">
             <table>
               <thead>
                 <tr>
@@ -100,6 +103,7 @@ export function Receipts({ summary }: { summary: RunSummary }) {
                 ))}
               </tbody>
             </table>
+            </div>
             <dl className="receipt-foot">
               <div>
                 <dt>Hold</dt>

@@ -11,7 +11,7 @@ Last updated: 2026-11-01. Submission deadline: 13 November 2026.
 | Mandates (Metal) | — | planned, §5.3 | **Not started.** |
 | Clearing (Metal) | `ClearingEmulator` | none | **SIMULATED in every mode.** Not available to builders on testnet. |
 | LLM judge / explainer / report text | `TagJudge`, template lines | `LlmJudge`, `Explainer`, `ReportWritingProviders` on Gemini (`gemini-3.5-flash-lite`) or Claude (`claude-opus-5-5`) | **LIVE on Gemini** (2026-11-01 run below). Claude path tested with fakes only. |
-| Dashboard | — | planned, §5.6 | **Not started.** |
+| Dashboard | Next.js 16 app + engine server, all rails mocked | same UI; rails switch badges to LIVE when wired | **Built.** Driven end to end in a browser (2026-11-01). |
 
 The only LIVE component is the LLM, on Gemini. Every money number on screen and in reports comes from the mocks or the emulator.
 
@@ -19,10 +19,22 @@ The only LIVE component is the LLM, on Gemini. Every money number on screen and 
 
 - **Baseline kept green.** `npm run check` = typecheck + unit tests + 10,000-run sim + sabotage.
 - **Pinned packages.** `@metalntwx/metal-agent@0.3.3` (`npx metal-agent --version` prints `0.3.3`) and `@metalntwx/metal-pay@0.3.4`, both exact, plus `viem`.
-- **Unit tests (`test/`, 110 tests).** Every exported policy function with boundaries (exact headroom, one micro short, zero float, all providers slow, price tie broken by latency), `verifyQuote` (overquote by one micro, underquote allowed, wrong payee, wrong asset, fractional/negative), ledger idempotency conflicts, hold lifecycle, `SqliteStore` ↔ `MemoryStore` parity, and the database-level `captured <= authorized` check.
+- **Unit tests (`test/`, 112 tests).** Every exported policy function with boundaries (exact headroom, one micro short, zero float, all providers slow, price tie broken by latency), `verifyQuote` (overquote by one micro, underquote allowed, wrong payee, wrong asset, fractional/negative), ledger idempotency conflicts, hold lifecycle, `SqliteStore` ↔ `MemoryStore` parity, and the database-level `captured <= authorized` check.
 - **Adapter contract tests.** The same suites run against `MockMetal`/`MetalFloatGateway` and `MockAirwallex`/`AirwallexHoldGateway`. The live runs are skipped unless `METAL_PRIVATE_KEY`+`METAL_RPC_URL` or `AIRWALLEX_CLIENT_ID`+`AIRWALLEX_API_KEY`+`AIRWALLEX_TEST_PAYMENT_METHOD` are set.
 - **Clearing (§5.4) behind `ClearingPort`, emulated.** See below.
 - **Fix:** `npm run providers` never started on Windows, because the entry-point check compared a `file://` URL to a Windows path. It now uses `pathToFileURL`.
+
+## Dashboard (§5.6)
+
+`apps/dashboard` (Next.js 16.4.2, App Router, production build) talks to the engine server in `src/server/` (port 4100) over Server-Sent Events.
+
+- **Engine server** (`src/server/session.ts`, `main.ts`) runs the scripted scenario from `src/sim/scenario.ts` in the mocked world. Hold increases go to a human (`PendingApprovals`, 30 s timeout counts as a decline). Deliveries are paced to a watchable speed. One run at a time, and a reloaded page gets the run replayed.
+- **What's on screen:** a header with the mode and a badge per rail (SIMULATED / NOT BUILT / LIVE / OFF, with details on hover); three job cards (hold with increment history, spent, current step and provider, step progress, a status chip); the reasoning feed (fact plus the policy's verbatim reason, upgraded to LLM phrasing at the end of a run when a key is set); the approval modal with countdown; demo controls; and the proof badge with sabotage results.
+- **Reconciliation and receipts** are computed by the engine from the mock rails themselves, not from the feed: ledger paid = rail settled = clearing redeemed = captured, per job and in total, plus the same invariant check as the sim. Receipts list step, provider, list price, paid (or "refused (asked $X)"), tx hash, clearing running total and policy reason, ending with hold, captured, released and savings against a premium-only full plan.
+- **Honesty:** mock tx hashes are shown but not linked to the testnet explorer, because they are not on any chain. The **mandate-test button is labelled "not built"** and the engine answers it with 501, because §5.3 doesn't exist yet. The scripted run also overruns job C at round 3, so a second customer can decline (beat 5).
+- **Verified in the built-in browser:** a scripted run through the real buttons, B approved in the modal and C declined. All six beats appeared. "✓ Every dollar accounted for" reconciled $1.39 four ways, with 0 violations. Layout checked at 1280 px (three cards, 7/5 split, no overflow) and 375 px (single column; only tables scroll). `test/server.test.ts` drives the same run over HTTP and SSE in CI.
+- **Not checked yet:** how it looks in screenshots (the pane was hidden during testing, so verification used page text and DOM measurements), dark mode, and an engine run with the LLM on (about 17 calls on your Gemini quota).
+- **Fix found while testing:** the rogue refusal read "quoted 420000 micros" on screen. `verifyQuote` now says "quoted $0.42, list price $0.14 (420000 vs 140000 micros)".
 
 ## Agent intelligence (§5.5)
 

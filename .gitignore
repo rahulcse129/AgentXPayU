@@ -8,3 +8,5 @@ node_modules/
 demo-events.json
 .next/
 demo-report.md
+next-env.d.ts
+*.tsbuildinfo

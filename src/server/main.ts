@@ -8,8 +8,8 @@
  *   POST /api/decline         { jobId }
  *   POST /api/control         { action }  demo buttons (see ControlAction)
  *
- * Run: npm run engine   (PORT=4100). Reads .env; GEMINI_API_KEY / LLM_API_KEY turn the LLM on,
- * DASHBOARD_LLM=off keeps it off (each run costs ~17 LLM calls).
+ * Run: npm run engine   (PORT=4100). Reads .env; GEMINI_API_KEY / LLM_API_KEY turn the LLM on.
+ * npm run engine:offline (or DASHBOARD_LLM=off) keeps it off: each run costs ~17 LLM calls.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { existsSync, readFileSync } from "node:fs";
@@ -63,8 +63,8 @@ function send(res: ServerResponse, status: number, data: unknown) {
   res.end(JSON.stringify(data));
 }
 
-export function createEngineServer(env: NodeJS.ProcessEnv = process.env) {
-  const llm = env.DASHBOARD_LLM === "off" ? undefined : llmFromEnv(env);
+export function createEngineServer(env: NodeJS.ProcessEnv = process.env, opts: { noLlm?: boolean } = {}) {
+  const llm = opts.noLlm || env.DASHBOARD_LLM === "off" ? undefined : llmFromEnv(env);
   const session = new DemoSession({
     llm,
     paceScale: env.PACE_SCALE ? Number(env.PACE_SCALE) : 0.6,
@@ -136,6 +136,6 @@ export function createEngineServer(env: NodeJS.ProcessEnv = process.env) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const port = Number(process.env.PORT ?? 4100);
-  const { server } = createEngineServer();
+  const { server } = createEngineServer(process.env, { noLlm: process.argv.includes("--no-llm") });
   server.listen(port, () => console.log(`margin engine on http://localhost:${port}  (dashboard: npm run dashboard)`));
 }

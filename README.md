@@ -4,7 +4,7 @@ Margin is an inference sourcing agent. It runs AI research jobs and buys every p
 
 Airwallex Agentic Banking Hackathon, Starter Kit 12 ("Inference Sourcing Agent").
 
-> **Status:** everything runs in mock mode today. Nothing is LIVE yet. See [docs/STATUS.md](docs/STATUS.md).
+> **Status:** every payment rail runs in mock mode today, labelled SIMULATED. Only the LLM (Gemini or Claude) can be LIVE. See [docs/STATUS.md](docs/STATUS.md).
 
 ## Run it (no keys needed)
 
@@ -13,6 +13,18 @@ npm install
 npm run demo      # scripted 3-job scenario with narration and reconciliation
 npm run check     # typecheck + unit tests + 10,000-run sim + sabotage proof
 ```
+
+### Dashboard
+
+Two processes, both production builds (never a dev server in a recording):
+
+```bash
+npm run dashboard:install && npm run dashboard:build   # once
+npm run engine:offline                                  # terminal 1: engine on :4100 (npm run engine uses the LLM key in .env)
+npm run dashboard                                       # terminal 2: open http://localhost:3000
+```
+
+Press **Run scripted demo** and answer the hold-increase prompts (approve B, decline C hits every demo beat).
 
 Node ≥ 22.13. Live mode needs the variables in [.env.example](.env.example).
 

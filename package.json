@@ -11,7 +11,12 @@
     "sim": "node --no-warnings --import tsx src/sim/run.ts",
     "sim:sabotage": "node --no-warnings --import tsx src/sim/run.ts --runs=2000 --sabotage=all",
     "demo": "node --no-warnings --env-file-if-exists=.env --import tsx src/sim/demo.ts",
-    "providers": "node --no-warnings --import tsx src/providers/server.ts"
+    "providers": "node --no-warnings --import tsx src/providers/server.ts",
+    "engine": "node --no-warnings --env-file-if-exists=.env --import tsx src/server/main.ts",
+    "engine:offline": "node --no-warnings --import tsx src/server/main.ts --no-llm",
+    "dashboard:install": "npm --prefix apps/dashboard install",
+    "dashboard:build": "npm --prefix apps/dashboard run build",
+    "dashboard": "npm --prefix apps/dashboard run start"
   },
   "engines": {
     "node": ">=22.13"
