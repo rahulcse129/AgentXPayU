@@ -1,0 +1,23 @@
+{
+  "name": "margin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Inference sourcing agent that buys AI work by live price and never charges past the customer's hold.",
+  "type": "module",
+  "scripts": {
+    "test": "node --no-warnings --import tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "sim": "node --no-warnings --import tsx src/sim/run.ts",
+    "sim:sabotage": "node --no-warnings --import tsx src/sim/run.ts --runs=2000 --sabotage=all",
+    "demo": "node --no-warnings --import tsx src/sim/demo.ts",
+    "providers": "node --no-warnings --import tsx src/providers/server.ts"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
