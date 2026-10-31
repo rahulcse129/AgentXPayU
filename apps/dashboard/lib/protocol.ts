@@ -1,0 +1,94 @@
+/**
+ * Wire types from the engine server. Mirrors src/server/session.ts and src/server/main.ts in the
+ * engine; keep in step with them (the engine's test/server.test.ts exercises the real shapes).
+ */
+export type Micros = number;
+
+export interface LedgerEvent {
+  seq: number;
+  at: number;
+  jobId: string | null;
+  type: string;
+  data: Record<string, unknown>;
+}
+
+export interface ReportSection {
+  stepId: string;
+  providerId: string;
+  text: string;
+  source: "llm" | "placeholder";
+}
+
+export interface ReceiptRow {
+  stepId: string;
+  providerId: string;
+  status: "paid" | "refused";
+  listPrice: Micros;
+  quoted: Micros;
+  paid: Micros;
+  txHash?: string;
+  txSource: "simulated";
+  clearingTotal?: Micros;
+  why: string | null;
+}
+
+export interface JobSummary {
+  jobId: string;
+  customer: string;
+  topic: string;
+  status: "completed" | "budget_limited" | "failed";
+  holdInitial: Micros;
+  holdFinal: Micros;
+  ledgerPaid: Micros;
+  railSettled: Micros;
+  clearingRedeemed: Micros;
+  captured: Micros;
+  released: Micros;
+  holdOutcome: "captured" | "cancelled" | "none";
+  premiumOnly: Micros;
+  dropped: string[];
+  receipt: ReceiptRow[];
+  report: ReportSection[];
+}
+
+export interface RunSummary {
+  jobs: JobSummary[];
+  totals: { ledgerPaid: Micros; railSettled: Micros; clearingRedeemed: Micros; captured: Micros; premiumOnly: Micros; floatDeposited: Micros; floatWithdrawn: Micros };
+  reconciled: boolean;
+  violations: string[];
+  llm: { calls: number; failures: number; tripped: string | null } | null;
+}
+
+export interface JobPlan {
+  id: string;
+  customer: string;
+  topic: string;
+  hold: Micros;
+  steps: { id: string; kind: string; units: number }[];
+}
+
+export type SessionMessage =
+  | { kind: "run.started"; runId: number; scripted: boolean; float: Micros; reserve: Micros; jobs: JobPlan[] }
+  | { kind: "event"; runId: number; event: LedgerEvent; fact: string | null; policy: string | null }
+  | { kind: "approval.requested"; runId: number; jobId: string; customer: string; current: Micros; newTotal: Micros; reason: string; deadline: number }
+  | { kind: "feed.phrased"; runId: number; lines: Record<number, string> }
+  | { kind: "run.finished"; runId: number; summary: RunSummary }
+  | { kind: "run.failed"; runId: number; error: string };
+
+export interface RailStatus {
+  rail: string;
+  source: "live" | "simulated" | "off" | "not built";
+  detail: string;
+}
+
+export interface Meta {
+  mode: "mock" | "live";
+  rails: RailStatus[];
+  proof: { badge: string; runs: number; passed: boolean; generatedAt: string; clearingBadge?: string } | null;
+  sabotage: { generatedAt: string; results: { name: string; caught: boolean; flagged: number; runs: number }[] } | null;
+  running: boolean;
+}
+
+export type ControlAction = "overrun_b" | "slow_lite" | "rogue_overquote" | "rogue_wrong_payee" | "rogue_junk" | "rogue_honest" | "mandate_test";
+
+export const ENGINE_URL = process.env.NEXT_PUBLIC_ENGINE_URL ?? "http://localhost:4100";

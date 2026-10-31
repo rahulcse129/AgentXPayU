@@ -12,14 +12,14 @@
  * Always writes demo-events.json (events, results, feed) for the dashboard.
  */
 import { writeFileSync } from "node:fs";
-import { cents, fmt, usd } from "../money.ts";
+import { fmt } from "../money.ts";
 import { Ledger, MemoryStore, type LedgerEvent } from "../ledger/ledger.ts";
 import { CATALOG, ROGUE_PROVIDER_ID } from "../policy/catalog.ts";
-import { DEFAULT_POLICY, type Step } from "../policy/types.ts";
+import { DEFAULT_POLICY } from "../policy/types.ts";
 import { MockAirwallex } from "../payments/mock-airwallex.ts";
 import { MockMetal } from "../payments/mock-metal.ts";
 import { InProcessProviders } from "../providers/in-process.ts";
-import { Orchestrator, type JobSpec } from "../engine/orchestrator.ts";
+import { Orchestrator } from "../engine/orchestrator.ts";
 import { ScriptedCustomers, TagJudge, type ProviderPort, type QualityJudge } from "../engine/ports.ts";
 import { ClearingEmulator } from "../clearing/emulator.ts";
 import { EMULATOR_TEST_KEY, Eip712Signer } from "../clearing/signer.ts";
@@ -29,24 +29,8 @@ import { Explainer, type Explanation } from "../agent/explainer.ts";
 import { ReportWritingProviders } from "../agent/report-providers.ts";
 import { checkInvariants, RecordingProviders } from "./harness.ts";
 import { seeded } from "./rng.ts";
+import { DEMO_FLOAT, DEMO_JOBS, DEMO_RESERVE, DEMO_TOPICS } from "./scenario.ts";
 
-const m = (id: string, units: number, minTier: 1 | 2, extra: Partial<Step> = {}): Step => ({
-  id, kind: "model", units, minTier, maxLatencyMs: 1000, ...extra,
-});
-const search = (id: string): Step => ({ id, kind: "search", units: 1, minTier: 2, maxLatencyMs: 1000 });
-const data = (id: string): Step => ({ id, kind: "data", units: 1, minTier: 2, maxLatencyMs: 1000, optional: true });
-
-export const DEMO_JOBS: JobSpec[] = [
-  { id: "A", customer: "Acme Research", hold: usd(1.0), steps: [search("search"), data("lookup"), m("outline", 12, 2), m("body", 15, 1), m("summary", 10, 2, { premiumEligible: true })] },
-  { id: "B", customer: "Birch Capital", hold: usd(0.75), steps: [search("search"), m("draft", 10, 1), m("analysis", 12, 2), m("wrapup", 8, 1), data("lookup")] },
-  { id: "C", customer: "Cobalt Labs", hold: usd(0.75), steps: [search("search"), m("scan", 14, 1), m("compare", 10, 2), data("lookup"), m("brief", 6, 1)] },
-];
-
-export const DEMO_TOPICS = new Map([
-  ["A", "How small online retailers can cut card-payment costs"],
-  ["B", "Risks of letting AI agents make purchases on a company card"],
-  ["C", "Choosing between open-weight and hosted language models for a startup"],
-]);
 
 async function main() {
   const rng = seeded(42);
@@ -79,8 +63,8 @@ async function main() {
   });
 
   const results = await engine.run(DEMO_JOBS, {
-    float: usd(1.5),
-    reserve: cents(30),
+    float: DEMO_FLOAT,
+    reserve: DEMO_RESERVE,
     onRound: (round, eng) => {
       if (round === 2) {
         eng.mutateStep("B", "analysis", (s) => ({ ...s, units: s.units * 4 }));

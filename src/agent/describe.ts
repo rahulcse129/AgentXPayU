@@ -12,6 +12,8 @@ export function describe(e: LedgerEvent): string | null {
     case "float.deposited": return `${j} deposit ${fmt(Number(d.amount))} USDZ float, ${fmt(Number(d.reserve))} kept as shared reserve`;
     case "hold.authorized": return `${j} card hold authorized ${fmt(Number(d.authorized))}`;
     case "fault.step_changed": return `${j} ⚠ step ${d.stepId} grew to ${d.units} paragraphs (prompt overrun)`;
+    case "fault.provider_slowed": return `${j} ⚠ ${d.providerId} slows to ~${(Number(d.latencyMs) / 1000).toFixed(1)}s under load`;
+    case "fault.rogue_mode": return `${j} ⚠ demo control: ${d.providerId} now behaves "${d.mode}"`;
     case "agent.decision": return `${j} ${d.stepId}: buy from ${d.providerId} for ${fmt(Number(d.cost))} — ${d.why}`;
     case "payment.refused": return `${j} ✋ refused ${d.providerId}: ${d.reason}`;
     case "provider.blocked": return `${j} ⛔ ${d.providerId} blocked (${d.why})`;

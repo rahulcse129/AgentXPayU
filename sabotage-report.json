@@ -1,0 +1,57 @@
+{
+  "generatedAt": "2026-10-31T20:40:11.608Z",
+  "allCaught": true,
+  "results": [
+    {
+      "name": "quote",
+      "caught": true,
+      "flagged": 748,
+      "runs": 2000,
+      "rules": {
+        "payment.overpaid": 1743,
+        "payment.wrong_payee": 1960
+      }
+    },
+    {
+      "name": "idempotency",
+      "caught": true,
+      "flagged": 1402,
+      "runs": 2000,
+      "rules": {
+        "payment.unrecorded": 2984,
+        "payment.missing_on_rail": 1460
+      }
+    },
+    {
+      "name": "hold",
+      "caught": true,
+      "flagged": 6,
+      "runs": 2000,
+      "rules": {
+        "hold.exceeded": 7,
+        "capture.mismatch": 7,
+        "hold.raced": 7,
+        "clearing.rule_broken": 7,
+        "clearing.mismatch": 7
+      }
+    },
+    {
+      "name": "capture",
+      "caught": true,
+      "flagged": 1981,
+      "runs": 2000,
+      "rules": {
+        "capture.mismatch": 4788
+      }
+    },
+    {
+      "name": "finality",
+      "caught": true,
+      "flagged": 1987,
+      "runs": 2000,
+      "rules": {
+        "clearing.captured_before_final": 4818
+      }
+    }
+  ]
+}

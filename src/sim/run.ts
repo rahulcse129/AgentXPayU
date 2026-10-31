@@ -57,13 +57,17 @@ async function main() {
     const names = sabotageArg === "all" ? Object.keys(SABOTAGES) : sabotageArg.split(",");
     console.log(`Sabotage check: each broken engine should FAIL the invariants (${runs} runs each)\n`);
     let allCaught = true;
+    const results: { name: string; caught: boolean; flagged: number; runs: number; rules: Record<string, number> }[] = [];
     for (const name of names) {
       const r = await sweep(name, SABOTAGES[name]);
       const caught = r.failingSeeds.length > 0;
       allCaught &&= caught;
+      results.push({ name, caught, flagged: r.failingSeeds.length, runs, rules: Object.fromEntries(r.byRule) });
       const rules = [...r.byRule.entries()].map(([k, n]) => `${k}×${n}`).join(", ") || "none";
       console.log(`  ${caught ? "CAUGHT " : "MISSED "} ${name.padEnd(12)} ${r.failingSeeds.length}/${runs} runs flagged  [${rules}]`);
     }
+    // The dashboard's proof badge links to this.
+    writeFileSync("sabotage-report.json", JSON.stringify({ generatedAt: new Date().toISOString(), allCaught, results }, null, 2));
     console.log(allCaught ? "\nEvery sabotage was caught. The checks have teeth." : "\nSome sabotage went unnoticed.");
     process.exit(allCaught ? 0 : 1);
   }
