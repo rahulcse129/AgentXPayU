@@ -1,0 +1,12 @@
+nonce 0xb7471a1aa00b85987eb8cb21984c161b6a54002a8a895cc4084a4ad377854d97
+status 200
+payer 0xbf3C4a9e8E907Ae6e2c6Ac80A3b51B94D740f696
+payee 0xa1ea44afe3948831194c90438f23827c8b458f88
+amount 0.01 *USDZ
+network eip155:63825
+transaction 0x6bb69259a229ce79c97561ea6528ced702e1012163a84a6c1a569e906e321132
+explorer https://testnet.metalntwx.com/tx/0x6bb69259a229ce79c97561ea6528ced702e1012163a84a6c1a569e906e321132
+header alt-svc: h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+header via: 1.1 google
+header x-cloud-trace-context: f776212707152655335e771c56bca4a5
+body {"quote":"Money is a claim on the future; a payment is that claim, kept.","issuedAt":"2026-10-31T22:35:09.732Z"}
