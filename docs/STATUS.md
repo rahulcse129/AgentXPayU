@@ -6,20 +6,49 @@ Last updated: 2026-11-01. Submission deadline: 13 November 2026.
 
 | Rail / component | Mode `mock` (default) | Mode `live` | State |
 |---|---|---|---|
-| Card holds (Airwallex) | `MockAirwallex` | `AirwallexHoldGateway`, sandbox | **Not yet run against the sandbox.** Client written, `VERIFY` fields open. |
-| Provider payments (Metal x402) | `MockMetal` | `MetalFloatGateway`, testnet | **Testnet path proven by hand** (one live `metal-agent pay`, tx below). `MetalFloatGateway` not wired into the engine yet. |
+| Card holds (Airwallex) | `MockAirwallex` | `AirwallexHoldGateway`, sandbox | **Blocked:** the team's sandbox has Payments disabled for its region (below). Client and smoke test ready. |
+| Provider payments (Metal x402) | `MockMetal` | `MetalFloatGateway`, testnet | **LIVE on testnet** (2026-11-01). The engine pays through Metal's x402 facilitator, and providers verify each payment on chain. `npm run live:x402`; passes the adapter contract tests live. The demo and dashboard still use `MockMetal`. |
 | Mandates (Metal) | — | planned, §5.3 | **Not started.** |
 | Clearing (Metal) | `ClearingEmulator` | none | **SIMULATED in every mode.** Not available to builders on testnet. |
 | LLM judge / explainer / report text | `TagJudge`, template lines | `LlmJudge`, `Explainer`, `ReportWritingProviders` on Gemini (`gemini-3.5-flash-lite`) or Claude (`claude-opus-5-5`) | **LIVE on Gemini** (2026-11-01 run below). Claude path tested with fakes only. |
 | Dashboard | Next.js 16 app + engine server, all rails mocked | same UI; rails switch badges to LIVE when wired | **Built.** Driven end to end in a browser (2026-11-01). |
 
-Inside the app, the only LIVE component is the LLM, on Gemini. Every money number on screen and in reports comes from the mocks or the emulator. Outside the app, one live testnet x402 payment has been made by hand with `metal-agent` (below).
+LIVE today: provider payments on Metal testnet (via `npm run live:x402`) and the LLM on Gemini. The demo and dashboard money numbers still come from the mocks and the emulator. Card holds are SIMULATED until the Airwallex region block is resolved.
+
+## Metal x402 payments, live (§5.2)
+
+- **`MetalFloatGateway`** (`src/payments/metal.ts`) sends x402 v2 `exact` payments in USDZ on `eip155:63825`, settled by Metal's facilitator (`HTTPFacilitatorClient` from `@x402/core`).
+  - The payload is the same EIP-3009 `TransferWithAuthorization` that `@x402/evm`'s `ExactEvmScheme` builds, with `extra` matching `metal-pay`'s `metalUsd`.
+  - The one difference: **the ERC-3009 nonce is `keccak256("margin:" + idempotencyKey)`**, not random. The USDZ contract accepts each (payer, nonce) once, so no retry, restart or duplicate call can pay twice, whatever the process remembers.
+  - `lookup()` answers from chain, via `authorizationState` and the `AuthorizationUsed` event.
+  - A facilitator timeout is a `TransientError`, and the engine's retry reuses the nonce.
+  - Before the first payment, `preflight()` refuses a non-testnet RPC or a clock more than 30 s off the chain.
+  - Float is accounting against the agent wallet, capped by its on-chain balance. Micros → base units is exactly ×10¹².
+- **Providers verify before delivering** (`src/providers/verify.ts`, `ChainPaymentVerifier`). The server reads the transaction and requires all of:
+  - the transaction succeeded
+  - an `AuthorizationUsed` event, so it's an x402 settlement
+  - a USDZ transfer to this provider's registered address of at least the price it quoted for that purchase key
+  - the transaction not already used to buy work (replay protection)
+
+  The demo keeps `TrustingVerifier`, labelled SIMULATED. Run `VERIFY_PAYMENTS=chain npm run providers` for live.
+- **Live engine run 2026-11-01** ([log](live-runs/20261031224714-engine-x402-run.md)): one job, 3/3 steps, three live payments: search $0.02 ([tx](https://testnet.metalntwx.com/tx/0xcc74e6dc41dc541c42aeaf9a61fee543d511b9f44c802f20c44e2c3dc60f863b)), brief $0.04 ([tx](https://testnet.metalntwx.com/tx/0x884c44e68a9af36cf6aed25a59b4129e08d03b55700da4434471297602f34d5e)), lookup $0.03 ([tx](https://testnet.metalntwx.com/tx/0xad281cb4013fc3ae2c74564819663bd761adafdd9417b16da98b7572c8b12b26)).
+  - The rogue `model-bargain` quoted $0.06 against a $0.02 list price. It was refused and blocked **before any payment**, and the step was bought from `model-std`.
+  - Every payment was re-read from chain independently of the gateway: the transfer matches the ledger and the nonce is used. **Ledger $0.09 = on-chain $0.09 = captured $0.09** (hold SIMULATED). Reconciled.
+- **Live contract tests** (`npm run test:live`): `MetalFloatGateway` passes the same FloatGateway contract as `MockMetal` on testnet, including the idempotency and replay-refusal cases. Wallet accounting adds up: 99.99 − 0.09 (run) − 0.03 (contract tests) = 99.87 USDZ, read on chain.
+- **Offline tests** (`test/metal.test.ts`, 13) use a fake chain and facilitator:
+  - the signature recovers to our address under USDZ's EIP-712 domain
+  - a repeated key asks the facilitator nothing
+  - a restarted process finds the earlier payment on chain and doesn't pay again
+  - timeouts before and after settlement are handled
+  - refusals map to `PaymentRefused` / `InsufficientFloat`
+  - the clock and chain guards hold
+- **Still to do:** wire `MetalFloatGateway` into the engine server and the dashboard behind `MODE=live`, so the Metal rail badge can read LIVE with explorer links in the receipts. Then mandates (§5.3).
 
 ## What is done
 
 - **Baseline kept green.** `npm run check` = typecheck + unit tests + 10,000-run sim + sabotage.
 - **Pinned packages.** `@metalntwx/metal-agent@0.3.3` (`npx metal-agent --version` prints `0.3.3`) and `@metalntwx/metal-pay@0.3.4`, both exact, plus `viem`.
-- **Unit tests (`test/`, 112 tests).** Every exported policy function with boundaries (exact headroom, one micro short, zero float, all providers slow, price tie broken by latency), `verifyQuote` (overquote by one micro, underquote allowed, wrong payee, wrong asset, fractional/negative), ledger idempotency conflicts, hold lifecycle, `SqliteStore` ↔ `MemoryStore` parity, and the database-level `captured <= authorized` check.
+- **Unit tests (`test/`, 125 tests).** Every exported policy function with boundaries (exact headroom, one micro short, zero float, all providers slow, price tie broken by latency), `verifyQuote` (overquote by one micro, underquote allowed, wrong payee, wrong asset, fractional/negative), ledger idempotency conflicts, hold lifecycle, `SqliteStore` ↔ `MemoryStore` parity, and the database-level `captured <= authorized` check.
 - **Adapter contract tests.** The same suites run against `MockMetal`/`MetalFloatGateway` and `MockAirwallex`/`AirwallexHoldGateway`. The live runs are skipped unless `METAL_PRIVATE_KEY`+`METAL_RPC_URL` or `AIRWALLEX_CLIENT_ID`+`AIRWALLEX_API_KEY`+`AIRWALLEX_TEST_PAYMENT_METHOD` are set.
 - **Clearing (§5.4) behind `ClearingPort`, emulated.** See below.
 - **Fix:** `npm run providers` never started on Windows, because the entry-point check compared a `file://` URL to a Windows path. It now uses `pathToFileURL`.

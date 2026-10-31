@@ -106,7 +106,7 @@ const liveMetal = process.env.METAL_PRIVATE_KEY && process.env.METAL_RPC_URL;
 const liveAirwallex = process.env.AIRWALLEX_CLIENT_ID && process.env.AIRWALLEX_API_KEY && process.env.AIRWALLEX_TEST_PAYMENT_METHOD;
 
 floatContract("MockMetal", () => new MockMetal(), false);
-floatContract("MetalFloatGateway (testnet)", () => new MetalFloatGateway(), liveMetal ? false : "set METAL_PRIVATE_KEY and METAL_RPC_URL");
+floatContract("MetalFloatGateway (testnet)", () => MetalFloatGateway.fromEnv(), liveMetal ? false : "set METAL_PRIVATE_KEY and METAL_RPC_URL");
 
 holdContract("MockAirwallex", () => new MockAirwallex(), false);
 holdContract(

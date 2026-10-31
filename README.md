@@ -4,7 +4,7 @@ Margin is an inference sourcing agent. It runs AI research jobs and buys every p
 
 Airwallex Agentic Banking Hackathon, Starter Kit 12 ("Inference Sourcing Agent").
 
-> **Status:** every payment rail runs in mock mode today, labelled SIMULATED. Only the LLM (Gemini or Claude) can be LIVE. See [docs/STATUS.md](docs/STATUS.md).
+> **Status:** provider payments are **LIVE on Metal testnet** (x402 via Metal's facilitator, verified on chain by the providers; `npm run live:x402`). Card holds and clearing are SIMULATED, and the demo and dashboard run fully mocked. See [docs/STATUS.md](docs/STATUS.md).
 
 ## Run it (no keys needed)
 
@@ -28,6 +28,15 @@ Press **Run scripted demo** and answer the hold-increase prompts (approve B, dec
 
 In Claude Code, `.claude/launch.json` defines the same two servers (`engine`, offline, and `dashboard`) for the in-app browser preview when the session is opened in this folder.
 
+### Live on Metal testnet
+
+Needs `METAL_PRIVATE_KEY` (funded with testnet USDZ) and `METAL_RPC_URL` in `.env`, and a synced system clock:
+
+```bash
+npm run live:x402     # one job, real x402 payments, every tx re-read from chain; spends at most 0.25 USDZ
+npm run test:live     # adapter contract tests against the real gateway (~0.03 USDZ)
+```
+
 Node ≥ 22.13. Live mode needs the variables in [.env.example](.env.example).
 
 ## Architecture
@@ -50,8 +59,8 @@ flowchart LR
 
 | Component | Today | Target |
 |---|---|---|
-| Airwallex holds | mock | sandbox (LIVE) |
-| Metal x402 payments | mock | testnet (LIVE) |
+| Airwallex holds | mock (sandbox blocked: Payments not available in the team's region) | sandbox (LIVE) |
+| Metal x402 payments | **LIVE on testnet** in `npm run live:x402`; mock in demo and dashboard | testnet (LIVE) everywhere |
 | Metal mandates | — | testnet (LIVE) |
 | Metal clearing | **SIMULATED** | stays SIMULATED until Metal opens testnet clearing |
 
@@ -61,7 +70,8 @@ flowchart LR
 |---|---|
 | Capture ≤ hold, exactly what was spent, floored to the cent; zero spend cancels | [orchestrator.ts `settleHold`](src/engine/orchestrator.ts) |
 | Raise the hold before spending past it | [policy.ts `planHoldIncrease`](src/policy/policy.ts), [orchestrator.ts `askForMore`](src/engine/orchestrator.ts) |
-| Nothing paid twice: ledger row before money moves, one key per purchase | [ledger.ts `beginPayment`](src/ledger/ledger.ts), [sqlite.ts](src/ledger/sqlite.ts) |
+| Nothing paid twice: ledger row before money moves, one key per purchase; on chain the ERC-3009 nonce is derived from that key | [ledger.ts `beginPayment`](src/ledger/ledger.ts), [sqlite.ts](src/ledger/sqlite.ts), [metal.ts `nonceFor`](src/payments/metal.ts) |
+| Providers deliver only after reading the payment on chain | [verify.ts `ChainPaymentVerifier`](src/providers/verify.ts) |
 | Never pay above list price or to an unregistered address | [policy.ts `verifyQuote`](src/policy/policy.ts), [catalog.ts](src/policy/catalog.ts) |
 | The LLM never moves money | [ports.ts `QualityJudge`](src/engine/ports.ts) |
 | Capture only after clearing is final | [orchestrator.ts `finalizeClearing`](src/engine/orchestrator.ts) |

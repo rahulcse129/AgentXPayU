@@ -8,8 +8,9 @@
  *   GET  /control         current behaviour of every provider
  *   POST /control         { providerId, mode?, latencyMs?, overquoteFactor? }  — demo buttons
  *
- * Simplified on purpose: this mock trusts the X-PAYMENT proof. The real flow should use the
- * x402 client/facilitator from the Metal starter kit to verify settlement before delivering.
+ * X-PAYMENT carries { txHash, key }. By default the server trusts it (TrustingVerifier, the
+ * SIMULATED demo). With a ChainPaymentVerifier (live mode, or VERIFY_PAYMENTS=chain with
+ * METAL_RPC_URL) it delivers only after reading the payment from Metal testnet: see verify.ts.
  *
  * Run: npm run providers   (PORT=4021 by default)
  */
@@ -18,10 +19,10 @@ import { pathToFileURL } from "node:url";
 import { CATALOG, providerById } from "../policy/catalog.ts";
 import type { Step } from "../policy/types.ts";
 import { HONEST, makeOutput, makeQuote, ProviderDeliveryError, type ProviderControl, type ProviderMode } from "./logic.ts";
+import { ChainPaymentVerifier, TrustingVerifier, type PaymentProof, type PaymentVerifier } from "./verify.ts";
 
 const controls = new Map<string, ProviderControl>();
 const ctl = (id: string) => controls.get(id) ?? HONEST;
-const LATENCY_SCALE = Number(process.env.LATENCY_SCALE ?? 1);
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
@@ -34,7 +35,13 @@ function send(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
-export function createProviderServer() {
+export function createProviderServer(
+  opts: { verifier?: PaymentVerifier; latencyScale?: number } = {},
+) {
+  const verifier = opts.verifier ?? new TrustingVerifier();
+  const latencyScale = opts.latencyScale ?? Number(process.env.LATENCY_SCALE ?? 1);
+  /** What each purchase key was quoted, so the payment is checked against the price we asked. */
+  const quoted = new Map<string, number>();
   return createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
@@ -60,9 +67,22 @@ export function createProviderServer() {
         const step = b.step as Step;
         const key = String(b.key);
         const payment = req.headers["x-payment"];
-        if (!payment) return send(res, 402, { x402Version: 1, accepts: [makeQuote(spec, step, ctl(spec.id), key)] });
+        if (!payment) {
+          const quote = makeQuote(spec, step, ctl(spec.id), key);
+          quoted.set(key, quote.amount);
+          return send(res, 402, { x402Version: 1, accepts: [quote] });
+        }
+        let proof: PaymentProof;
+        try {
+          proof = JSON.parse(String(payment)) as PaymentProof;
+        } catch {
+          return send(res, 402, { error: "X-PAYMENT is not valid JSON" });
+        }
+        const price = quoted.get(key) ?? makeQuote(spec, step, ctl(spec.id), key).amount;
+        const check = await verifier.verify(proof, { payTo: spec.payTo, amount: price });
+        if (!check.ok) return send(res, 402, { error: `payment not accepted: ${check.reason}` });
         const out = makeOutput(spec, step, ctl(spec.id), Math.random);
-        await new Promise((r) => setTimeout(r, out.latencyMs * LATENCY_SCALE));
+        await new Promise((r) => setTimeout(r, out.latencyMs * latencyScale));
         return send(res, 200, out);
       }
       send(res, 404, { error: "not found" });
@@ -74,5 +94,10 @@ export function createProviderServer() {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const port = Number(process.env.PORT ?? 4021);
-  createProviderServer().listen(port, () => console.log(`mock providers on http://localhost:${port}`));
+  const live = process.env.VERIFY_PAYMENTS === "chain";
+  if (live && !process.env.METAL_RPC_URL) throw new Error("VERIFY_PAYMENTS=chain needs METAL_RPC_URL");
+  const verifier = live ? new ChainPaymentVerifier(process.env.METAL_RPC_URL!) : new TrustingVerifier();
+  createProviderServer({ verifier }).listen(port, () =>
+    console.log(`providers on http://localhost:${port} · payments verified: ${live ? "on Metal testnet (LIVE)" : "trusted (SIMULATED)"}`),
+  );
 }
