@@ -12,6 +12,8 @@ import { InProcessProviders } from "../providers/in-process.ts";
 import type { ProviderMode } from "../providers/logic.ts";
 import { Orchestrator, type JobResult, type JobSpec, type Sabotage } from "../engine/orchestrator.ts";
 import { ScriptedCustomers, TagJudge, type ApprovalAnswer, type ProviderPort } from "../engine/ports.ts";
+import { ClearingEmulator } from "../clearing/emulator.ts";
+import { EMULATOR_TEST_KEY, Eip712Signer, HmacSigner } from "../clearing/signer.ts";
 import { between, pick, seeded } from "./rng.ts";
 
 // ------------------------------------------------------------------ scenario
@@ -88,6 +90,9 @@ export function randomScenario(seed: number): Scenario {
 
 // ------------------------------------------------------------------ run + check
 
+/** Every Nth seed signs running totals with real EIP-712 instead of keyed hashes. */
+export const EIP712_EVERY = 500;
+
 export interface RunOutcome {
   seed: number;
   violations: string[];
@@ -119,6 +124,8 @@ export async function runScenario(sc: Scenario, sabotage?: Sabotage): Promise<Ru
   const providers = new RecordingProviders(inner);
   inner.control(ROGUE_PROVIDER_ID, { mode: sc.faults.rogueMode });
   const customers = new ScriptedCustomers(() => sc.faults.customerAnswer);
+  // Real EIP-712 signatures on a sample of runs; keyed hashes elsewhere (EIP-712 recovery is ~14 ms).
+  const clearing = new ClearingEmulator(sc.seed % EIP712_EVERY === 0 ? new Eip712Signer(EMULATOR_TEST_KEY) : new HmacSigner());
 
   const engine = new Orchestrator({
     ledger,
@@ -127,6 +134,7 @@ export async function runScenario(sc: Scenario, sabotage?: Sabotage): Promise<Ru
     providers,
     judge: new TagJudge(),
     customers,
+    clearing,
     catalog: CATALOG,
     policy: sc.policy,
     rng,
@@ -139,6 +147,7 @@ export async function runScenario(sc: Scenario, sabotage?: Sabotage): Promise<Ru
     results = await engine.run(sc.jobs, {
       float: sc.float,
       reserve: sc.reserve,
+      clearingEpochRounds: 1 + (sc.seed % 4),
       onRound: (round, eng) => {
         const f = sc.faults;
         if (f.overrun && f.overrun.round === round) {
@@ -152,7 +161,7 @@ export async function runScenario(sc: Scenario, sabotage?: Sabotage): Promise<Ru
     violations.push(`run.crashed: ${String(e)}`);
   }
 
-  violations.push(...checkInvariants({ ledger, airwallex, metal, quoted: providers.quoted }));
+  violations.push(...checkInvariants({ ledger, airwallex, metal, quoted: providers.quoted, clearing }));
 
   const events = ledger.events();
   const count = (t: string) => events.filter((e) => e.type === t).length;
@@ -180,6 +189,11 @@ export async function runScenario(sc: Scenario, sabotage?: Sabotage): Promise<Ru
     holdsCancelled: results.filter((r) => r.holdOutcome === "cancelled").length,
     spent: results.reduce((s, r) => s + r.spent, 0),
     premiumOnlyCost: results.reduce((s, r) => s + r.premiumOnlyCost, 0),
+    clearingTotalsSigned: clearing.signed.length,
+    clearingRedemptions: clearing.redemptions.length,
+    clearingRedeemed: clearing.redemptions.reduce((s, r) => s + r.amount, 0),
+    clearingEpochs: clearing.currentEpoch - 1,
+    clearingEip712Runs: clearing.signerKind === "eip712" ? 1 : 0,
   };
   return { seed: sc.seed, violations, results, stats, ledger };
 }
@@ -191,9 +205,10 @@ export function checkInvariants(w: {
   airwallex: MockAirwallex;
   metal: MockMetal;
   quoted: Map<string, { providerId: string; units: number }>;
+  clearing?: ClearingEmulator;
 }): string[] {
   const v: string[] = [];
-  const { ledger, airwallex, metal, quoted } = w;
+  const { ledger, airwallex, metal, quoted, clearing } = w;
 
   // 1. Nobody ever tried to break an Airwallex rule (over-capture, double capture, ...).
   for (const msg of airwallex.violations) v.push(`airwallex.rule_broken: ${msg}`);
@@ -262,6 +277,52 @@ export function checkInvariants(w: {
   // 7. Float is conserved and fully withdrawn.
   if (metal.deposited !== metal.withdrawn + metal.totalSettled()) {
     v.push(`float.leak: deposited ${metal.deposited} != withdrawn ${metal.withdrawn} + settled ${metal.totalSettled()}`);
+  }
+
+  if (clearing) v.push(...checkClearing(ledger, clearing, jobIds));
+  return v;
+}
+
+/** Clearing invariants (SIMULATED layer): it must agree with the ledger to the micro, and finalize before capture. */
+function checkClearing(ledger: Ledger, clearing: ClearingEmulator, jobIds: Set<string>): string[] {
+  const v: string[] = [];
+
+  // 8. Nobody tried to break a clearing rule (lower total, totals over deposit, early withdrawal, ...).
+  for (const msg of clearing.violations) v.push(`clearing.rule_broken: ${msg}`);
+
+  // 9. No running total was redeemed twice, and each payee's redemptions only ever go up.
+  const seen = new Set<string>();
+  const lastRedeemed = new Map<string, Micros>();
+  for (const r of clearing.redemptions) {
+    const id = `${r.jobKey}|${r.payee}|${r.cumulative}`;
+    if (seen.has(id)) v.push(`clearing.double_redeem: ${id}`);
+    seen.add(id);
+    const pair = `${r.jobKey}|${r.payee}`;
+    if (r.amount <= 0 || r.cumulative - (lastRedeemed.get(pair) ?? 0) !== r.amount) v.push(`clearing.double_redeem: ${id} amount ${r.amount}`);
+    lastRedeemed.set(pair, r.cumulative);
+  }
+
+  for (const jobId of new Set([...jobIds, ...clearing.jobKeys()])) {
+    const cs = clearing.status(jobId);
+    const spent = ledger.spent(jobId);
+    if (!cs) {
+      if (spent > 0) v.push(`clearing.missing: ${jobId} paid ${spent} with no clearing deposit`);
+      continue;
+    }
+    // 10. Sum of redeemed totals = ledger paid, per job.
+    if (cs.redeemed !== spent) v.push(`clearing.mismatch: ${jobId} redeemed ${cs.redeemed}, ledger paid ${spent}`);
+    // 11. Deposit minus redeemed = withdrawn, and every deposit was returned.
+    if (!cs.final) v.push(`clearing.not_withdrawn: ${jobId}`);
+    else if (cs.deposited - cs.redeemed !== cs.withdrawn) {
+      v.push(`clearing.leak: ${jobId} deposited ${cs.deposited} - redeemed ${cs.redeemed} != withdrawn ${cs.withdrawn}`);
+    }
+    // 12. Finality gate: the card hold was settled only after this job's clearing was withdrawn.
+    const events = ledger.events(jobId);
+    const settledAt = events.find((e) => e.type === "hold.captured" || e.type === "hold.cancelled")?.seq;
+    const finalAt = events.find((e) => e.type === "clearing.withdrawn")?.seq;
+    if (settledAt !== undefined && (finalAt === undefined || finalAt > settledAt)) {
+      v.push(`clearing.captured_before_final: ${jobId}`);
+    }
   }
   return v;
 }

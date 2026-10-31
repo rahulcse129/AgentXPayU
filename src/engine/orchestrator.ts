@@ -8,6 +8,8 @@
  *  - retries reuse the same idempotency key, so nothing is paid twice
  *  - every hold ends captured (exactly what was spent) or cancelled, even for failed jobs
  *  - unused float is withdrawn
+ *  - with clearing on: every payment is also a signed running total, and a hold is captured
+ *    only after that job's clearing has finalized (epoch closed, settled, deposit withdrawn)
  */
 import { floorToCent, type Micros } from "../money.ts";
 import type { Ledger } from "../ledger/ledger.ts";
@@ -28,6 +30,7 @@ import {
 } from "../policy/policy.ts";
 import type { JobBudget, PolicyConfig, ProviderHealth, ProviderSpec, Step } from "../policy/types.ts";
 import { InsufficientFloat, TransientError, type FloatGateway, type HoldGateway } from "../payments/types.ts";
+import type { ClearingPort } from "../clearing/port.ts";
 import type { CustomerPort, ProviderPort, QualityJudge } from "./ports.ts";
 
 export interface JobSpec {
@@ -68,6 +71,8 @@ export interface Sabotage {
   ignoreHold?: boolean;
   /** Capture the full hold instead of what was spent. */
   captureFullHold?: boolean;
+  /** Capture holds before the job's clearing epoch has closed and settled. */
+  captureBeforeFinality?: boolean;
 }
 
 export interface EngineDeps {
@@ -77,6 +82,8 @@ export interface EngineDeps {
   providers: ProviderPort;
   judge: QualityJudge;
   customers: CustomerPort;
+  /** Optional clearing layer (emulated until Metal opens clearing on testnet). */
+  clearing?: ClearingPort;
   catalog: ProviderSpec[];
   policy: PolicyConfig;
   /** Seeded in the simulation so every run is reproducible. */
@@ -90,6 +97,8 @@ export interface RunOptions {
   maxPayRetries?: number;
   /** Called at the start of each round: the place to inject overruns and slowdowns. */
   onRound?: (round: number, engine: Orchestrator) => void | Promise<void>;
+  /** With clearing on, close and settle an epoch every this many rounds (default 3). */
+  clearingEpochRounds?: number;
 }
 
 interface JobState {
@@ -172,6 +181,11 @@ export class Orchestrator {
         const { holdId } = await holds.authorize({ jobId: spec.id, amount: spec.hold });
         s.holdId = holdId;
         ledger.recordHold(spec.id, holdId, spec.hold);
+        if (this.d.clearing) {
+          // The clearing deposit mirrors the hold: what providers can redeem never exceeds what the customer approved.
+          const { depositId } = await this.d.clearing.openDeposit(spec.id, spec.hold);
+          ledger.log(spec.id, "clearing.deposit_opened", { depositId, amount: spec.hold, source: this.d.clearing.source });
+        }
       } catch (e) {
         s.error = `hold not authorized: ${String(e)}`;
         s.finished = true;
@@ -217,10 +231,15 @@ export class Orchestrator {
             if (s.remaining.length === 0) this.finish(s);
           }
         }
+        if (this.d.clearing && round % (opts.clearingEpochRounds ?? 3) === 0) await this.closeAndSettleEpoch();
       }
     } finally {
+      for (const s of this.jobs.values()) await this.resolvePending(s);
+      // Finality gate: clearing closes, settles and returns unused deposits BEFORE any card capture.
+      if (!this.d.sabotage?.captureBeforeFinality) await this.finalizeClearing();
       // Every hold is captured or cancelled, whatever happened above.
       for (const s of this.jobs.values()) await this.settleHold(s, opts);
+      if (this.d.sabotage?.captureBeforeFinality) await this.finalizeClearing();
       const left = await float.balance();
       if (left > 0) {
         await float.withdraw(left);
@@ -359,6 +378,7 @@ export class Orchestrator {
       if (!txHash) return { kind: "unpaid" };
       s.floatSpent += amount;
     }
+    await this.signTotal(jobId, quote.payTo);
 
     let delivered: { output: string; latencyMs: number };
     try {
@@ -423,6 +443,11 @@ export class Orchestrator {
       try {
         // Raise the authorization FIRST; only a successful increment lets spending go past the old hold.
         await holds.increment(s.holdId!, newTotal);
+        // Then the clearing deposit, so the ledger's hold (what the engine spends against) is raised last.
+        if (this.d.clearing) {
+          await this.d.clearing.raiseDeposit(jobId, newTotal);
+          ledger.log(jobId, "clearing.deposit_raised", { amount: newTotal, source: this.d.clearing.source });
+        }
         ledger.recordIncrement(jobId, newTotal);
         return;
       } catch (e) {
@@ -432,16 +457,29 @@ export class Orchestrator {
     this.degrade(s, headroom(this.budget(s)), answer === "approved" ? "increment declined by issuer" : `customer ${answer}`);
   }
 
+  /** Resolve any payment left pending by a crash, from the rail's own record. */
+  private async resolvePending(s: JobState) {
+    const { ledger, float } = this.d;
+    const jobId = s.spec.id;
+    for (const p of ledger.payments(jobId).filter((x) => x.status === "pending")) {
+      const settled = await float.lookup(p.key);
+      if (settled) {
+        ledger.markPaid(p.key, settled.txHash);
+        await this.signTotal(jobId, p.payTo);
+      } else ledger.markFailed(p.key, "unresolved at job end");
+    }
+  }
+
   private async settleHold(s: JobState, opts: RunOptions) {
-    const { ledger, holds, float } = this.d;
+    const { ledger, holds, clearing } = this.d;
     const jobId = s.spec.id;
     const h = ledger.hold(jobId);
     if (!h || h.status !== "authorized") return;
-    // Resolve any payment left pending by a crash.
-    for (const p of ledger.payments(jobId).filter((x) => x.status === "pending")) {
-      const settled = await float.lookup(p.key);
-      if (settled) ledger.markPaid(p.key, settled.txHash);
-      else ledger.markFailed(p.key, "unresolved at job end");
+    const cs = clearing?.status(jobId);
+    if (cs && !cs.final && !this.d.sabotage?.captureBeforeFinality) {
+      // Never capture against payments clearing has not finalized. The startup sweeper retries this hold.
+      ledger.log(jobId, "hold.capture_deferred", { why: "clearing not final", source: clearing!.source });
+      return;
     }
     const spent = ledger.spent(jobId);
     const amount = this.d.sabotage?.captureFullHold ? h.authorized : Math.min(floorToCent(spent), h.authorized);
@@ -463,6 +501,49 @@ export class Orchestrator {
       }
     }
     ledger.log(jobId, "hold.settle_failed", { error: "retries exhausted" });
+  }
+
+  // ------------------------------------------------------------ clearing
+
+  /** Express everything this job has paid `payTo` so far as one signed cumulative total. */
+  private async signTotal(jobId: string, payTo: string) {
+    const { clearing, ledger } = this.d;
+    if (!clearing) return;
+    const who = payTo.toLowerCase();
+    const cumulative = ledger
+      .payments(jobId)
+      .filter((p) => p.status === "paid" && p.payTo.toLowerCase() === who)
+      .reduce((sum, p) => sum + p.amount, 0);
+    const t = await clearing.signRunningTotal(jobId, payTo, cumulative);
+    ledger.log(jobId, "clearing.total_signed", { payee: who, cumulative: t.cumulative, epoch: t.epoch, signature: t.signature, source: clearing.source });
+  }
+
+  private async closeAndSettleEpoch() {
+    const { clearing, ledger } = this.d;
+    if (!clearing) return;
+    const epoch = await clearing.closeEpoch();
+    const redeemed = await clearing.settle(epoch);
+    ledger.log(null, "clearing.epoch_settled", { epoch, redemptions: redeemed.length, source: clearing.source });
+    for (const r of redeemed) {
+      ledger.log(r.jobKey, "clearing.redeemed", { payee: r.payee, cumulative: r.cumulative, amount: r.amount, epoch, source: clearing.source });
+    }
+  }
+
+  /** Close the last epoch, settle it, and withdraw every job's unused deposit. */
+  private async finalizeClearing() {
+    const { clearing, ledger } = this.d;
+    if (!clearing) return;
+    try {
+      await this.closeAndSettleEpoch();
+      for (const jobId of this.jobs.keys()) {
+        const cs = clearing.status(jobId);
+        if (!cs || cs.final) continue;
+        const { amount } = await clearing.withdraw(jobId);
+        ledger.log(jobId, "clearing.withdrawn", { amount, redeemed: cs.redeemed, source: clearing.source });
+      }
+    } catch (e) {
+      ledger.log(null, "clearing.finalize_failed", { error: String(e), source: clearing.source });
+    }
   }
 
   // ------------------------------------------------------------ helpers

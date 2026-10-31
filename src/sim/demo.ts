@@ -15,6 +15,8 @@ import { MockMetal } from "../payments/mock-metal.ts";
 import { InProcessProviders } from "../providers/in-process.ts";
 import { Orchestrator, type JobSpec } from "../engine/orchestrator.ts";
 import { ScriptedCustomers, TagJudge } from "../engine/ports.ts";
+import { ClearingEmulator } from "../clearing/emulator.ts";
+import { EMULATOR_TEST_KEY, Eip712Signer } from "../clearing/signer.ts";
 import { checkInvariants, RecordingProviders } from "./harness.ts";
 import { seeded } from "./rng.ts";
 
@@ -53,6 +55,10 @@ const describe = (e: LedgerEvent): string | null => {
     case "hold.captured": return `${j} captured ${fmt(Number(d.captured))}, released ${fmt(Number(d.released))}`;
     case "hold.cancelled": return `${j} hold cancelled, released ${fmt(Number(d.released))}`;
     case "float.withdrawn": return `${j} withdrew unused float ${fmt(Number(d.amount))} USDZ`;
+    case "clearing.deposit_opened": return `${j} [SIMULATED] clearing deposit ${fmt(Number(d.amount))}`;
+    case "clearing.deposit_raised": return `${j} [SIMULATED] clearing deposit raised to ${fmt(Number(d.amount))}`;
+    case "clearing.epoch_settled": return Number(d.redemptions) ? `${j} [SIMULATED] clearing epoch ${d.epoch} closed: ${d.redemptions} running totals redeemed` : null;
+    case "clearing.withdrawn": return `${j} [SIMULATED] clearing final: redeemed ${fmt(Number(d.redeemed))}, unused deposit ${fmt(Number(d.amount))} withdrawn`;
     default: return null;
   }
 };
@@ -73,8 +79,9 @@ async function main() {
   const customers = new ScriptedCustomers((req) => (req.jobId === "B" ? "approved" : "declined"));
 
   const recorder = new RecordingProviders(providers);
+  const clearing = new ClearingEmulator(new Eip712Signer(EMULATOR_TEST_KEY));
   const engine = new Orchestrator({
-    ledger, holds: airwallex, float: metal, providers: recorder, judge: new TagJudge(), customers,
+    ledger, holds: airwallex, float: metal, providers: recorder, judge: new TagJudge(), customers, clearing,
     catalog: CATALOG, policy: DEFAULT_POLICY, rng,
   });
 
@@ -97,10 +104,13 @@ async function main() {
       `${r.jobId.padEnd(4)} ${spec.customer.padEnd(15)} ${fmt(r.holdFinal).padEnd(7)} ${fmt(r.spent).padEnd(7)} ${fmt(r.captured).padEnd(9)} ${fmt(r.premiumOnlyCost).padEnd(13)} ${r.status}`,
     );
   }
-  const v = checkInvariants({ ledger, airwallex, metal, quoted: recorder.quoted });
+  const v = checkInvariants({ ledger, airwallex, metal, quoted: recorder.quoted, clearing });
   const spent = results.reduce((s, r) => s + r.spent, 0);
   const captured = results.reduce((s, r) => s + r.captured, 0);
-  console.log(`\nReconciliation: ledger paid ${fmt(spent)} = rail settled ${fmt(metal.totalSettled())} = Airwallex captured ${fmt(captured)}`);
+  const redeemed = clearing.redemptions.reduce((s, r) => s + r.amount, 0);
+  console.log(
+    `\nReconciliation: ledger paid ${fmt(spent)} = rail settled ${fmt(metal.totalSettled())} = clearing redeemed ${fmt(redeemed)} [SIMULATED] = Airwallex captured ${fmt(captured)}`,
+  );
   console.log(v.length ? `VIOLATIONS:\n  ${v.join("\n  ")}` : "All invariants hold: no customer charged past their hold.");
   writeFileSync("demo-events.json", JSON.stringify({ jobs: DEMO_JOBS, results, events }, null, 2));
 }

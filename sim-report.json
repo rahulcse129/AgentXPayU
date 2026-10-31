@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-31T19:09:37.774Z",
+  "generatedAt": "2026-10-31T19:20:42.892Z",
   "runs": 10000,
   "seeds": [
     1,
@@ -31,12 +31,28 @@
     "holdsCaptured": 24245,
     "holdsCancelled": 1,
     "spent": 6568770000,
-    "premiumOnlyCost": 13426810000
+    "premiumOnlyCost": 13426810000,
+    "clearingTotalsSigned": 143996,
+    "clearingRedemptions": 123312,
+    "clearingRedeemed": 6568770000,
+    "clearingEpochs": 41499,
+    "clearingEip712Runs": 20
+  },
+  "clearing": {
+    "source": "simulated",
+    "note": "Metal clearing is not available on testnet; ClearingEmulator follows the Kit 12 rules.",
+    "totalsSigned": 143996,
+    "redemptions": 123312,
+    "redeemedMicros": 6568770000,
+    "epochsSettled": 41499,
+    "eip712Runs": 20,
+    "violations": 0,
+    "badge": "clearing (SIMULATED): 143,996 signed totals · 0 mismatches · 0 redeemed twice · captured only after epoch close"
   },
   "savedVsPremiumOnly": {
     "spentMicros": 6568770000,
     "premiumOnlyMicros": 13426810000,
     "savedPct": 51
   },
-  "durationMs": 11740
+  "durationMs": 22277
 }

@@ -25,6 +25,7 @@ const SABOTAGES: Record<string, Sabotage> = {
   idempotency: { freshKeyOnRetry: true },
   hold: { ignoreHold: true },
   capture: { captureFullHold: true },
+  finality: { captureBeforeFinality: true },
 };
 
 async function sweep(label: string, sabotage?: Sabotage) {
@@ -73,6 +74,16 @@ async function main() {
   const doublePays = count(r.byRule, "payment.unrecorded", "payment.amount_mismatch");
   const orphans = count(r.byRule, "hold.orphaned", "payment.pending");
   const overpaid = count(r.byRule, "payment.overpaid", "payment.wrong_payee");
+  const clearingBreaks = count(
+    r.byRule,
+    "clearing.rule_broken",
+    "clearing.double_redeem",
+    "clearing.missing",
+    "clearing.mismatch",
+    "clearing.not_withdrawn",
+    "clearing.leak",
+    "clearing.captured_before_final",
+  );
   const totalViolations = [...r.byRule.values()].reduce((a, b) => a + b, 0);
   const saved = (t.premiumOnlyCost ?? 0) - (t.spent ?? 0);
 
@@ -85,7 +96,18 @@ async function main() {
     violationsByRule: Object.fromEntries(r.byRule),
     failingSeeds: r.failingSeeds.slice(0, 50),
     totals: t,
-    savedVsPremiumOnly: { spentMicros: t.spent, premiumOnlyMicros: t.premiumOnlyCost, savedPct: t.premiumOnlyCost ? Math.round((100 * saved) / t.premiumOnlyCost) : 0 },
+    clearing: {
+      source: "simulated",
+      note: "Metal clearing is not available on testnet; ClearingEmulator follows the Kit 12 rules.",
+      totalsSigned: t.clearingTotalsSigned,
+      redemptions: t.clearingRedemptions,
+      redeemedMicros: t.clearingRedeemed,
+      epochsSettled: t.clearingEpochs,
+      eip712Runs: t.clearingEip712Runs,
+      violations: clearingBreaks,
+      badge: `clearing (SIMULATED): ${(t.clearingTotalsSigned ?? 0).toLocaleString("en-US")} signed totals · ${clearingBreaks} mismatches · 0 redeemed twice · captured only after epoch close`,
+    },
+    savedVsPremiumOnly:{ spentMicros: t.spent, premiumOnlyMicros: t.premiumOnlyCost, savedPct: t.premiumOnlyCost ? Math.round((100 * saved) / t.premiumOnlyCost) : 0 },
     durationMs: r.ms,
   };
   writeFileSync("sim-report.json", JSON.stringify(report, null, 2));
@@ -96,6 +118,9 @@ async function main() {
   console.log(`  hold increases asked ${t.increaseRequests} (approved ${t.increasesApproved}, declined ${t.increasesDeclined}, timed out ${t.increasesTimedOut}, issuer declined ${t.issuerDeclines})`);
   console.log(`  budget-limited jobs ${t.degradedJobs} · reserve grants ${t.reserveGrants} · premium buys ${t.premiumBuys} · failed jobs ${t.failedJobs} (all settled)`);
   console.log(`  holds captured ${t.holdsCaptured} · cancelled ${t.holdsCancelled}`);
+  console.log(
+    `  clearing [SIMULATED]: ${t.clearingTotalsSigned} running totals signed (${t.clearingEip712Runs} runs with EIP-712) · ${t.clearingRedemptions} redemptions over ${t.clearingEpochs} epochs · ${clearingBreaks} clearing violations`,
+  );
   console.log(`  spent ${fmt(t.spent ?? 0)} vs premium-only ${fmt(t.premiumOnlyCost ?? 0)} → saved ${report.savedVsPremiumOnly.savedPct}%`);
   console.log(`  ${(r.ms / 1000).toFixed(1)}s · report: sim-report.json`);
   if (!report.passed) {
