@@ -26,6 +26,8 @@ npm run dashboard                                       # terminal 2: open http:
 
 Press **Run scripted demo** and answer the hold-increase prompts (approve B, decline C hits every demo beat).
 
+In Claude Code, `.claude/launch.json` defines the same two servers (`engine`, offline, and `dashboard`) for the in-app browser preview when the session is opened in this folder.
+
 Node ≥ 22.13. Live mode needs the variables in [.env.example](.env.example).
 
 ## Architecture

@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "engine",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "engine:offline"],
+      "port": 4100
+    },
+    {
+      "name": "dashboard",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dashboard"],
+      "port": 3000
+    }
+  ]
+}
