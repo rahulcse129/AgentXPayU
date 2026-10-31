@@ -100,8 +100,12 @@ Result of `npm run sim` (10,000 runs): **0 violations**. 143,996 running totals 
 
 ## What blocks live mode (needs the team)
 
-1. **Airwallex sandbox keys** (`AIRWALLEX_CLIENT_ID`, `AIRWALLEX_API_KEY`) to resolve the `VERIFY` comments in `src/payments/airwallex.ts`: is `increment_authorization.amount` the new total or the delta, which card brands support it, the minimum capture amount, and the cancel body field names. Then run `scripts/airwallex-smoke.ts` (not written yet).
-2. **Metal testnet:** an account created on 0.3.3 (`metal-agent account create`), a funded key, and an RPC endpoint from the console. The console's billing page has hung for other teams, so use any working endpoint via `METAL_RPC_URL`.
+1. **Airwallex sandbox:** keys **in place and verified 2026-11-01.** A scoped key with only Payment Acceptance read/write and no IP whitelist logs in through our client (`/api/v1/authentication/login` returns 201 with a token valid for about 30 minutes). Still to do: resolve the `VERIFY` comments in `src/payments/airwallex.ts` (is `increment_authorization.amount` the new total or the delta, which card brands support it, the minimum capture amount, the cancel body field names), then write and run `scripts/airwallex-smoke.ts`. A bare `curl -X POST` with no body gets `411 Length Required`; send an empty body.
+2. **Metal testnet:** RPC endpoint and agent key **in place and verified 2026-11-01.**
+   - The console endpoint (network `alta-testnet`) answers chain ID **63825**, the `eip155:63825` that `metal-pay` names for testnet.
+   - Agent address: `0xbf3C4a9e8E907Ae6e2c6Ac80A3b51B94D740f696`. Its USDZ balance is **0, so it needs the faucet** (`npx metal-agent fund <address> --network testnet`).
+   - **USDZ** is at `0x…B5d5`, has **18 decimals**, and is also the gas token, so the native balance and the USDZ balance are the same thing. Our ledger counts in micros (6 decimals): the live adapter must convert by exactly ×10¹² and never round.
+   - Still to do: the owner account for mandates (`metal-agent account create`, needs the RPC), then the adapter itself.
 3. **Design decision for mandates (§5.3):** with a mandate, the agent pays *from the owner's MetalAccount* (`createMandatePaymentClient`), not from a float wallet it holds. So `FloatGateway.deposit` becomes "fund the owner account and bind the mandate", and `withdraw` becomes "revoke and leave the rest in the owner account". Rahul should confirm this before `MetalFloatGateway` is written.
 4. The mock provider server still trusts `X-PAYMENT`. Real verification goes through Metal's facilitator: `https://x402-testnet.metalntwx.com/x402/facilitator` with `registerMetalScheme` on an `x402ResourceServer`. That needs `@x402/core` and a middleware package (`@x402/hono` or `@x402/express`), which are not installed yet.
 
