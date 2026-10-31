@@ -26,7 +26,9 @@ npm run dashboard                                       # terminal 2: open http:
 
 Press **Run scripted demo** and answer the hold-increase prompts (approve B, decline C hits every demo beat).
 
-In Claude Code, `.claude/launch.json` defines the same two servers (`engine`, offline, and `dashboard`) for the in-app browser preview when the session is opened in this folder.
+**With real Metal testnet payments:** run `npm run engine:live` instead of `engine:offline`. The header shows MODE: MIXED, the Metal rail LIVE, and every receipt links its transaction on the testnet explorer. A scripted run spends about 1.4 testnet USDZ. It needs `METAL_PRIVATE_KEY`, `METAL_RPC_URL` and a synced clock; add the LLM with `npm run engine -- --live-metal`.
+
+In Claude Code, `.claude/launch.json` defines `engine` (offline), `engine-live` and `dashboard` for the in-app browser preview when the session is opened in this folder.
 
 ### Live on Metal testnet
 

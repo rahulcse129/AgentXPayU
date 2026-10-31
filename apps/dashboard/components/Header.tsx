@@ -20,7 +20,8 @@ export function Header({ meta, connected }: { meta: Meta | null; connected: bool
         </div>
       </div>
       <div className="header-right">
-        <span className={`mode mode-${meta?.mode ?? "mock"}`}>MODE: {(meta?.mode ?? "mock").toUpperCase()}</span>
+        {/* Never claim a mode before the engine has said which rails are live. */}
+        <span className={`mode mode-${meta?.mode ?? "loading"}`}>MODE: {meta ? meta.mode.toUpperCase() : "…"}</span>
         <span className={`conn ${connected ? "ok" : "bad"}`}>{connected ? "engine connected" : "engine offline"}</span>
       </div>
       <ul className="rails" aria-label="Rails">

@@ -1,19 +1,33 @@
 /**
- * One dashboard demo run: the scripted three-job scenario in the fully mocked world, with a
- * human answering hold increases (PendingApprovals) and demo buttons injecting faults.
+ * One dashboard demo run: the scripted three-job scenario, with a human answering hold
+ * increases (PendingApprovals) and demo buttons injecting faults.
+ *
+ * Two rails for provider payments:
+ *  - simulated (default): MockMetal and in-process mock providers.
+ *  - live (`live` option): MetalFloatGateway paying real x402 on Metal testnet, and HTTP
+ *    providers that deliver only after reading each payment on chain (ChainPaymentVerifier).
+ * Card holds (MockAirwallex) and clearing (ClearingEmulator) are SIMULATED either way.
  *
  * Everything the dashboard shows comes from here: ledger events as they happen, and at the end
- * receipts and the reconciliation computed from the mock rails themselves (not from the feed),
- * plus the invariant check the simulation uses.
+ * receipts and the reconciliation computed from the rails themselves (on the live rail, every
+ * payment is re-read from chain), plus the invariant check the simulation uses.
  */
+import type { AddressInfo } from "node:net";
+import type { Server } from "node:http";
 import { Ledger, MemoryStore, type LedgerEvent } from "../ledger/ledger.ts";
 import { CATALOG, ROGUE_PROVIDER_ID, providerById } from "../policy/catalog.ts";
 import { DEFAULT_POLICY } from "../policy/types.ts";
 import type { Micros } from "../money.ts";
 import { MockAirwallex } from "../payments/mock-airwallex.ts";
 import { MockMetal } from "../payments/mock-metal.ts";
+import type { FloatGateway } from "../payments/types.ts";
+import type { MetalFloatGateway } from "../payments/metal.ts";
+import { auditPaymentsOnChain, METAL_EXPLORER_TX } from "../payments/metal-audit.ts";
 import { InProcessProviders } from "../providers/in-process.ts";
-import type { ProviderMode } from "../providers/logic.ts";
+import { HttpProviders } from "../providers/http-client.ts";
+import { createProviderServer } from "../providers/server.ts";
+import { ChainPaymentVerifier } from "../providers/verify.ts";
+import type { ProviderControl, ProviderMode } from "../providers/logic.ts";
 import { Orchestrator, type JobResult } from "../engine/orchestrator.ts";
 import { PendingApprovals, TagJudge, type ProviderPort, type QualityJudge } from "../engine/ports.ts";
 import { ClearingEmulator } from "../clearing/emulator.ts";
@@ -37,7 +51,9 @@ export interface ReceiptRow {
   quoted: Micros;
   paid: Micros;
   txHash?: string;
-  txSource: "simulated";
+  txSource: "live" | "simulated";
+  /** Explorer page for a live transaction. Absent for mock hashes, which are on no chain. */
+  txUrl?: string;
   clearingTotal?: Micros;
   why: string | null;
 }
@@ -67,6 +83,53 @@ export interface RunSummary {
   reconciled: boolean;
   violations: string[];
   llm: { calls: number; failures: number; tripped: string | null } | null;
+  /** Where "rail settled" came from: the mock rail, or each transaction re-read from Metal testnet. */
+  rail: { source: "live" | "simulated"; payer?: string; network?: string };
+}
+
+/** The live Metal rail for dashboard runs. */
+export interface LiveMetal {
+  rpcUrl: string;
+  /** A fresh gateway per run, so float accounting starts at zero. */
+  makeFloat: () => MetalFloatGateway;
+}
+
+/** Providers the engine buys from, plus the demo-control hooks on them. */
+interface ProviderBackend {
+  port: ProviderPort;
+  control(id: string, patch: Partial<ProviderControl>): Promise<void>;
+  modeOf(id: string): ProviderMode;
+  close(): void;
+}
+
+function mockBackend(rng: () => number): ProviderBackend {
+  const mock = new InProcessProviders(CATALOG, rng);
+  return {
+    port: mock,
+    control: async (id, patch) => mock.control(id, patch),
+    modeOf: (id) => mock.get(id).mode,
+    close: () => {},
+  };
+}
+
+/** HTTP providers that only deliver after verifying the payment on Metal testnet. */
+async function liveBackend(rpcUrl: string): Promise<ProviderBackend> {
+  const server: Server = createProviderServer({ verifier: new ChainPaymentVerifier(rpcUrl), latencyScale: 0 });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const modes = new Map<string, ProviderMode>();
+  const control = async (id: string, patch: Partial<ProviderControl>) => {
+    const res = await fetch(`${base}/control`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ providerId: id, ...patch, latencyMs: "latencyMs" in patch ? (patch.latencyMs ?? null) : undefined }),
+    });
+    if (!res.ok) throw new Error(`provider control ${id}: ${res.status} ${await res.text()}`);
+    if (patch.mode) modes.set(id, patch.mode);
+  };
+  // The provider server's controls outlive a run; start every run from honest, normal-speed providers.
+  for (const p of CATALOG) await control(p.id, { mode: "honest", latencyMs: undefined, overquoteFactor: 2 });
+  return { port: new HttpProviders(base), control, modeOf: (id) => modes.get(id) ?? "honest", close: () => server.close() };
 }
 
 export type SessionMessage =
@@ -102,13 +165,17 @@ export class DemoSession {
   private history: SessionMessage[] = [];
   private readonly listeners = new Set<(m: SessionMessage) => void>();
   private approvals: PendingApprovals | null = null;
-  private providers: InProcessProviders | null = null;
+  private providers: ProviderBackend | null = null;
   private ledger: Ledger | null = null;
   private pendingOverrun = false;
 
   constructor(
-    private readonly opts: { llm?: GuardedLlm; paceScale?: number; approvalTimeoutMs?: number } = {},
+    private readonly opts: { llm?: GuardedLlm; paceScale?: number; approvalTimeoutMs?: number; live?: LiveMetal } = {},
   ) {}
+
+  get railSource(): "live" | "simulated" {
+    return this.opts.live ? "live" : "simulated";
+  }
 
   get isRunning(): boolean {
     return this.running;
@@ -138,7 +205,7 @@ export class DemoSession {
   }
 
   /** Demo buttons. Returns what happened, for the button's toast. */
-  control(action: ControlAction): { ok: boolean; message: string } {
+  async control(action: ControlAction): Promise<{ ok: boolean; message: string }> {
     if (action === "mandate_test") {
       return { ok: false, message: "Needs Metal mandates (§5.3), not built yet. Nothing was changed." };
     }
@@ -148,12 +215,12 @@ export class DemoSession {
       return { ok: true, message: "Job B's analysis step will grow ×4 at the next round." };
     }
     if (action === "slow_lite") {
-      this.providers.control("model-lite", { latencyMs: 2500 });
+      await this.providers.control("model-lite", { latencyMs: 2500 });
       this.ledger.log(null, "fault.provider_slowed", { providerId: "model-lite", latencyMs: 2500 });
       return { ok: true, message: "model-lite now answers in ~2.5 s." };
     }
     const mode = action.replace("rogue_", "") as ProviderMode;
-    this.providers.control(ROGUE_PROVIDER_ID, { mode, overquoteFactor: 3 });
+    await this.providers.control(ROGUE_PROVIDER_ID, { mode, overquoteFactor: 3 });
     this.ledger.log(null, "fault.rogue_mode", { providerId: ROGUE_PROVIDER_ID, mode });
     return { ok: true, message: `${ROGUE_PROVIDER_ID} now behaves "${mode}".` };
   }
@@ -182,19 +249,35 @@ export class DemoSession {
       this.emit({ kind: "event", runId, event, fact: describe(event), policy: policyReason(event) }),
     );
     const airwallex = new MockAirwallex();
-    const metal = new MockMetal();
-    const mock = new InProcessProviders(CATALOG, rng);
-    if (scripted) mock.control(ROGUE_PROVIDER_ID, { mode: "overquote", overquoteFactor: 3 });
+    const live = this.opts.live;
+    let float: FloatGateway;
+    let backend: ProviderBackend;
+    try {
+      if (live) {
+        const gw = live.makeFloat();
+        // Refuse before anything moves if the RPC is wrong or the clock is off chain time.
+        await gw.preflight();
+        float = gw;
+        backend = await liveBackend(live.rpcUrl);
+      } else {
+        float = new MockMetal();
+        backend = mockBackend(rng);
+      }
+    } catch (e) {
+      this.emit({ kind: "run.failed", runId, error: `live rail not ready: ${String(e).replace(live?.rpcUrl ?? "\u0000", "<rpc>")}` });
+      return;
+    }
+    if (scripted) await backend.control(ROGUE_PROVIDER_ID, { mode: "overquote", overquoteFactor: 3 });
     const llm = this.opts.llm;
-    const writer = llm ? new ReportWritingProviders(mock, llm, DEMO_TOPICS, (id) => mock.get(id).mode) : undefined;
-    const recorder = new RecordingProviders(new PacedProviders(writer ?? mock, this.opts.paceScale ?? 0.6));
+    const writer = llm ? new ReportWritingProviders(backend.port, llm, DEMO_TOPICS, (id) => backend.modeOf(id)) : undefined;
+    const recorder = new RecordingProviders(new PacedProviders(writer ?? backend.port, this.opts.paceScale ?? 0.6));
     const judge: QualityJudge = llm ? new LlmJudge(llm, { kinds: ["model"], other: new TagJudge() }) : new TagJudge();
     const clearing = new ClearingEmulator(new Eip712Signer(EMULATOR_TEST_KEY));
     const approvals = new PendingApprovals(this.opts.approvalTimeoutMs ?? 30_000, (req) =>
       this.emit({ kind: "approval.requested", runId, ...req, deadline: Date.now() + (this.opts.approvalTimeoutMs ?? 30_000) }),
     );
     this.approvals = approvals;
-    this.providers = mock;
+    this.providers = backend;
     this.ledger = ledger;
 
     this.emit({
@@ -214,23 +297,24 @@ export class DemoSession {
 
     try {
       const engine = new Orchestrator({
-        ledger, holds: airwallex, float: metal, providers: recorder, judge, customers: approvals, clearing,
+        ledger, holds: airwallex, float, providers: recorder, judge, customers: approvals, clearing,
         catalog: CATALOG, policy: DEFAULT_POLICY, rng,
       });
       const results = await engine.run(DEMO_JOBS, {
         float: DEMO_FLOAT,
         reserve: DEMO_RESERVE,
-        onRound: (round, eng) => {
+        onRound: async (round, eng) => {
           if (this.pendingOverrun || (scripted && round === 2)) {
             this.pendingOverrun = false;
             eng.mutateStep("B", "analysis", (s) => ({ ...s, units: s.units * 4 }));
           }
-          if (scripted && round === 2) this.control("slow_lite");
+          if (scripted && round === 2) await this.control("slow_lite");
           if (scripted && round === 3) eng.mutateStep("C", "compare", (s) => ({ ...s, units: s.units * 3 }));
         },
       });
+      backend.close();
 
-      const summary = this.summarize(results, ledger, airwallex, metal, clearing, recorder, writer);
+      const summary = await this.summarize(results, ledger, airwallex, float, clearing, recorder, writer);
       this.emit({ kind: "run.finished", runId, summary });
 
       // Phrase the feed once at the end (one batched LLM call), then upgrade the lines in place.
@@ -241,24 +325,41 @@ export class DemoSession {
         if (Object.keys(lines).length) this.emit({ kind: "feed.phrased", runId, lines });
       }
     } catch (e) {
-      this.emit({ kind: "run.failed", runId, error: String(e) });
+      backend.close();
+      this.emit({ kind: "run.failed", runId, error: String(e).replace(live?.rpcUrl ?? "\u0000", "<rpc>") });
     }
   }
 
-  private summarize(
+  private async summarize(
     results: JobResult[],
     ledger: Ledger,
     airwallex: MockAirwallex,
-    metal: MockMetal,
+    float: FloatGateway,
     clearing: ClearingEmulator,
     recorder: RecordingProviders,
     writer?: ReportWritingProviders,
-  ): RunSummary {
+  ): Promise<RunSummary> {
     const events = ledger.events();
+    const live = this.opts.live;
+    const metal = float instanceof MockMetal ? float : undefined;
+    const payer = live ? (float as MetalFloatGateway).address : undefined;
+    // What the rail actually settled, per payment key: the mock's own record, or each tx re-read from chain.
+    const settled: { key: string; payTo: string; amount: Micros }[] = [];
+    const chainProblems: string[] = [];
+    if (metal) {
+      for (const s of metal.settlements.values()) settled.push(s);
+    } else if (live && payer) {
+      const paid = ledger.payments().filter((p) => p.status === "paid");
+      const audited = await auditPaymentsOnChain(live.rpcUrl, payer, paid);
+      for (const a of audited) {
+        if (!a.succeeded) chainProblems.push(`chain.not_settled: ${a.key} tx ${a.txHash || "(none)"}`);
+        settled.push({ key: a.key, payTo: a.payTo, amount: a.amount });
+      }
+    }
+    const settledFor = (jobId: string) => settled.filter((s) => s.key.startsWith(`${jobId}:`)).reduce((a, s) => a + s.amount, 0);
     const jobs = results.map((r): JobSummary => {
       const spec = DEMO_JOBS.find((j) => j.id === r.jobId)!;
       const hold = [...airwallex.holds.values()].find((h) => h.jobId === r.jobId);
-      const settled = [...metal.settlements.values()].filter((s) => s.key.startsWith(`${r.jobId}:`)).reduce((a, s) => a + s.amount, 0);
       const captured = hold?.status === "captured" ? hold.captured : 0;
       return {
         jobId: r.jobId,
@@ -268,28 +369,32 @@ export class DemoSession {
         holdInitial: spec.hold,
         holdFinal: r.holdFinal,
         ledgerPaid: r.spent,
-        railSettled: settled,
+        railSettled: settledFor(r.jobId),
         clearingRedeemed: clearing.status(r.jobId)?.redeemed ?? 0,
         captured,
         released: (hold?.authorized ?? 0) - captured,
         holdOutcome: r.holdOutcome,
         premiumOnly: r.premiumOnlyCost,
         dropped: r.dropped,
-        receipt: receiptFor(r.jobId, ledger, events, recorder),
+        receipt: receiptFor(r.jobId, ledger, events, recorder, live ? "live" : "simulated"),
         report: writer?.report(r.jobId) ?? [],
       };
     });
     const sum = (f: (j: JobSummary) => Micros) => jobs.reduce((a, j) => a + f(j), 0);
+    const fromEvents = (type: string) => events.filter((e) => e.type === type).reduce((a, e) => a + Number(e.data.amount), 0);
     const totals = {
       ledgerPaid: sum((j) => j.ledgerPaid),
-      railSettled: metal.totalSettled(),
+      railSettled: settled.reduce((a, s) => a + s.amount, 0),
       clearingRedeemed: clearing.redemptions.reduce((a, x) => a + x.amount, 0),
       captured: sum((j) => j.captured),
       premiumOnly: sum((j) => j.premiumOnly),
-      floatDeposited: metal.deposited,
-      floatWithdrawn: metal.withdrawn,
+      floatDeposited: fromEvents("float.deposited"),
+      floatWithdrawn: fromEvents("float.withdrawn"),
     };
-    const violations = checkInvariants({ ledger, airwallex, metal, quoted: recorder.quoted, clearing });
+    const violations = [
+      ...checkInvariants({ ledger, airwallex, metal, railSettlements: metal ? undefined : settled, quoted: recorder.quoted, clearing }),
+      ...chainProblems,
+    ];
     const perJobOk = jobs.every((j) => j.ledgerPaid === j.railSettled && j.railSettled === j.clearingRedeemed && j.clearingRedeemed === j.captured);
     const totalOk = totals.ledgerPaid === totals.railSettled && totals.railSettled === totals.clearingRedeemed && totals.clearingRedeemed === totals.captured;
     const llm = this.opts.llm;
@@ -299,11 +404,12 @@ export class DemoSession {
       reconciled: perJobOk && totalOk && violations.length === 0,
       violations,
       llm: llm ? { calls: llm.calls, failures: llm.failures, tripped: llm.tripped } : null,
+      rail: live ? { source: "live", payer, network: "Metal testnet (eip155:63825)" } : { source: "simulated" },
     };
   }
 }
 
-function receiptFor(jobId: string, ledger: Ledger, events: LedgerEvent[], recorder: RecordingProviders): ReceiptRow[] {
+function receiptFor(jobId: string, ledger: Ledger, events: LedgerEvent[], recorder: RecordingProviders, rail: "live" | "simulated"): ReceiptRow[] {
   const jobEvents = events.filter((e) => e.jobId === jobId);
   return ledger
     .payments(jobId)
@@ -326,7 +432,8 @@ function receiptFor(jobId: string, ledger: Ledger, events: LedgerEvent[], record
         quoted: p.amount,
         paid: p.status === "paid" ? p.amount : 0,
         txHash: p.txHash,
-        txSource: "simulated",
+        txSource: rail,
+        txUrl: rail === "live" && p.status === "paid" && p.txHash ? `${METAL_EXPLORER_TX}${p.txHash}` : undefined,
         clearingTotal: total ? Number(total.data.cumulative) : undefined,
         why: p.status === "refused" ? (p.reason ?? null) : decision ? String(decision.data.why) : null,
       };

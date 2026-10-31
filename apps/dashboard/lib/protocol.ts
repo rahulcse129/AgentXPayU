@@ -27,7 +27,9 @@ export interface ReceiptRow {
   quoted: Micros;
   paid: Micros;
   txHash?: string;
-  txSource: "simulated";
+  txSource: "live" | "simulated";
+  /** Explorer page for a live transaction; absent for mock hashes, which are on no chain. */
+  txUrl?: string;
   clearingTotal?: Micros;
   why: string | null;
 }
@@ -57,6 +59,7 @@ export interface RunSummary {
   reconciled: boolean;
   violations: string[];
   llm: { calls: number; failures: number; tripped: string | null } | null;
+  rail: { source: "live" | "simulated"; payer?: string; network?: string };
 }
 
 export interface JobPlan {
@@ -82,7 +85,7 @@ export interface RailStatus {
 }
 
 export interface Meta {
-  mode: "mock" | "live";
+  mode: "mock" | "mixed" | "live";
   rails: RailStatus[];
   proof: { badge: string; runs: number; passed: boolean; generatedAt: string; clearingBadge?: string } | null;
   sabotage: { generatedAt: string; results: { name: string; caught: boolean; flagged: number; runs: number }[] } | null;

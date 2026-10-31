@@ -211,3 +211,7 @@ td.num { text-align: right; white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+.mode-mixed { background: var(--warn); color: #fff; }
+.mode-live { background: var(--good); color: #fff; }
+td.mono a { color: var(--accent); text-decoration: none; font-weight: 600; }
+td.mono a:hover { text-decoration: underline; }

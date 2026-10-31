@@ -7,13 +7,13 @@ Last updated: 2026-11-01. Submission deadline: 13 November 2026.
 | Rail / component | Mode `mock` (default) | Mode `live` | State |
 |---|---|---|---|
 | Card holds (Airwallex) | `MockAirwallex` | `AirwallexHoldGateway`, sandbox | **Blocked:** the team's sandbox has Payments disabled for its region (below). Client and smoke test ready. |
-| Provider payments (Metal x402) | `MockMetal` | `MetalFloatGateway`, testnet | **LIVE on testnet** (2026-11-01). The engine pays through Metal's x402 facilitator, and providers verify each payment on chain. `npm run live:x402`; passes the adapter contract tests live. The demo and dashboard still use `MockMetal`. |
+| Provider payments (Metal x402) | `MockMetal` | `MetalFloatGateway`, testnet | **LIVE on testnet** (2026-11-01). The engine pays through Metal's x402 facilitator, and providers verify each payment on chain. `npm run live:x402`; passes the adapter contract tests live. **On the dashboard via `npm run engine:live`.** The terminal demo still uses `MockMetal`. |
 | Mandates (Metal) | — | planned, §5.3 | **Not started.** |
 | Clearing (Metal) | `ClearingEmulator` | none | **SIMULATED in every mode.** Not available to builders on testnet. |
 | LLM judge / explainer / report text | `TagJudge`, template lines | `LlmJudge`, `Explainer`, `ReportWritingProviders` on Gemini (`gemini-3.5-flash-lite`) or Claude (`claude-opus-5-5`) | **LIVE on Gemini** (2026-11-01 run below). Claude path tested with fakes only. |
-| Dashboard | Next.js 16 app + engine server, all rails mocked | same UI; rails switch badges to LIVE when wired | **Built.** Driven end to end in a browser (2026-11-01). |
+| Dashboard | Next.js 16 app + engine server, all rails mocked (`engine:offline`) | `engine:live`: Metal x402 LIVE, header MODE: MIXED, per-rail badges | **Built; live Metal rail verified in a browser** (2026-11-01, run below). |
 
-LIVE today: provider payments on Metal testnet (via `npm run live:x402`) and the LLM on Gemini. The demo and dashboard money numbers still come from the mocks and the emulator. Card holds are SIMULATED until the Airwallex region block is resolved.
+LIVE today: provider payments on Metal testnet (`npm run live:x402`, and the dashboard via `npm run engine:live`) and the LLM on Gemini. Card holds and clearing are SIMULATED (Airwallex region block; clearing not on testnet). The terminal demo is fully mocked.
 
 ## Metal x402 payments, live (§5.2)
 
@@ -42,7 +42,19 @@ LIVE today: provider payments on Metal testnet (via `npm run live:x402`) and the
   - timeouts before and after settlement are handled
   - refusals map to `PaymentRefused` / `InsufficientFloat`
   - the clock and chain guards hold
-- **Still to do:** wire `MetalFloatGateway` into the engine server and the dashboard behind `MODE=live`, so the Metal rail badge can read LIVE with explorer links in the receipts. Then mandates (§5.3).
+- **On the dashboard (`npm run engine:live`).** The engine server pays through a fresh `MetalFloatGateway` per run and buys from HTTP providers that verify each payment on chain. The demo buttons drive those providers over their `/control` endpoint.
+  - The header reads **MODE: MIXED** and the Metal rail badge **LIVE**, with the agent address on hover. Airwallex and clearing stay SIMULATED.
+  - Receipts link every Metal tx to the testnet explorer. Mock hashes are never linked.
+  - Reconciliation's "Settled on chain" column re-reads each payment from chain after the run (`src/payments/metal-audit.ts`, independent of the gateway). The invariant check runs against those on-chain settlements in place of MockMetal's.
+  - Each run starts with `preflight()` (chain and clock); if it fails, the run stops with a message before anything is paid.
+- **Live dashboard run, 2026-11-01** ([record](live-runs/2026-11-01-dashboard-live-metal-run.md)), started from the "Run scripted demo" button:
+  - **13 live x402 payments**, all linked; the rogue's $0.42 quote against a $0.14 list price was refused and blocked before any payment.
+  - B's hold increase was approved. C's timed out and counted as a decline, so this run also exercised the timeout path live.
+  - **Ledger $1.39 = settled on chain $1.39 = captured $1.39**, 0 violations, "✓ Every dollar accounted for".
+  - The wallet went from 99.87 to **98.48 USDZ**, exactly the $1.39 spent.
+  - A scripted dashboard run costs about 1.4 testnet USDZ; the faucet tops up.
+- Fixed during the run: the header briefly said "MODE: MOCK" before the engine's metadata arrived. It now shows "MODE: …" until the engine says which rails are live.
+- **Next:** mandates (§5.3).
 
 ## What is done
 

@@ -203,12 +203,16 @@ export async function runScenario(sc: Scenario, sabotage?: Sabotage, opts: { jud
 export function checkInvariants(w: {
   ledger: Ledger;
   airwallex: MockAirwallex;
-  metal: MockMetal;
+  /** The mock rail. Without it, pass `railSettlements` read back from the live rail. */
+  metal?: MockMetal;
+  railSettlements?: { key: string; payTo: string; amount: Micros }[];
   quoted: Map<string, { providerId: string; units: number }>;
   clearing?: ClearingEmulator;
 }): string[] {
   const v: string[] = [];
   const { ledger, airwallex, metal, quoted, clearing } = w;
+  const settlements = new Map((metal ? [...metal.settlements.values()] : (w.railSettlements ?? [])).map((s) => [s.key, s]));
+  if (!metal && !w.railSettlements) v.push("rail.unchecked: no settlements given to check the ledger against");
 
   // 1. Nobody ever tried to break an Airwallex rule (over-capture, double capture, ...).
   for (const msg of airwallex.violations) v.push(`airwallex.rule_broken: ${msg}`);
@@ -255,27 +259,27 @@ export function checkInvariants(w: {
 
   // 5. The rail and the ledger agree exactly: no double payments, no phantom payments.
   const paidRows = new Map(ledger.payments().filter((p) => p.status === "paid").map((p) => [p.key, p]));
-  for (const s of metal.settlements.values()) {
+  for (const s of settlements.values()) {
     const row = paidRows.get(s.key);
     if (!row) v.push(`payment.unrecorded: settlement ${s.key} (${s.amount}) not in ledger as paid — double or phantom payment`);
     else if (row.amount !== s.amount) v.push(`payment.amount_mismatch: ${s.key}`);
   }
-  for (const key of paidRows.keys()) if (!metal.settlements.has(key)) v.push(`payment.missing_on_rail: ${key}`);
+  for (const key of paidRows.keys()) if (!settlements.has(key)) v.push(`payment.missing_on_rail: ${key}`);
 
   // 6. No provider was ever paid above list price or to an address other than its registered one.
-  for (const s of metal.settlements.values()) {
+  for (const s of settlements.values()) {
     const q = quoted.get(s.key.split("#")[0]!);
     if (!q) {
       v.push(`payment.unquoted: ${s.key}`);
       continue;
     }
     const spec = providerById(q.providerId);
-    if (s.payTo !== spec.payTo) v.push(`payment.wrong_payee: ${s.key} paid to ${s.payTo}`);
+    if (s.payTo.toLowerCase() !== spec.payTo.toLowerCase()) v.push(`payment.wrong_payee: ${s.key} paid to ${s.payTo}`);
     if (s.amount > spec.pricePerUnit * q.units) v.push(`payment.overpaid: ${s.key} paid ${s.amount} > list ${spec.pricePerUnit * q.units}`);
   }
 
-  // 7. Float is conserved and fully withdrawn.
-  if (metal.deposited !== metal.withdrawn + metal.totalSettled()) {
+  // 7. Float is conserved and fully withdrawn (mock rail; on chain the float is wallet accounting).
+  if (metal && metal.deposited !== metal.withdrawn + metal.totalSettled()) {
     v.push(`float.leak: deposited ${metal.deposited} != withdrawn ${metal.withdrawn} + settled ${metal.totalSettled()}`);
   }
 

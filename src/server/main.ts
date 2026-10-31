@@ -10,12 +10,15 @@
  *
  * Run: npm run engine   (PORT=4100). Reads .env; GEMINI_API_KEY / LLM_API_KEY turn the LLM on.
  * npm run engine:offline (or DASHBOARD_LLM=off) keeps it off: each run costs ~17 LLM calls.
+ * npm run engine:live (--live-metal) pays providers with real x402 on Metal testnet, about
+ * 1.4 USDZ per scripted run; needs METAL_PRIVATE_KEY and METAL_RPC_URL.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { existsSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { llmFromEnv, llmProviderFromEnv } from "../agent/llm-config.ts";
-import { DemoSession, type ControlAction, type SessionMessage } from "./session.ts";
+import { MetalFloatGateway } from "../payments/metal.ts";
+import { DemoSession, type ControlAction, type LiveMetal, type SessionMessage } from "./session.ts";
 
 export interface RailStatus {
   rail: string;
@@ -24,7 +27,8 @@ export interface RailStatus {
 }
 
 export interface Meta {
-  mode: "mock" | "live";
+  /** "mixed": some rails live, some simulated; the per-rail badges say which. */
+  mode: "mock" | "mixed" | "live";
   rails: RailStatus[];
   proof: { badge: string; runs: number; passed: boolean; generatedAt: string; clearingBadge?: string } | null;
   sabotage: { generatedAt: string; results: { name: string; caught: boolean; flagged: number; runs: number }[] } | null;
@@ -63,10 +67,19 @@ function send(res: ServerResponse, status: number, data: unknown) {
   res.end(JSON.stringify(data));
 }
 
-export function createEngineServer(env: NodeJS.ProcessEnv = process.env, opts: { noLlm?: boolean } = {}) {
+export function createEngineServer(env: NodeJS.ProcessEnv = process.env, opts: { noLlm?: boolean; liveMetal?: boolean } = {}) {
   const llm = opts.noLlm || env.DASHBOARD_LLM === "off" ? undefined : llmFromEnv(env);
+  let live: LiveMetal | undefined;
+  let payer = "";
+  if (opts.liveMetal) {
+    const rpcUrl = env.METAL_RPC_URL?.trim();
+    if (!rpcUrl || !env.METAL_PRIVATE_KEY) throw new Error("--live-metal needs METAL_PRIVATE_KEY and METAL_RPC_URL in .env");
+    payer = MetalFloatGateway.fromEnv(env).address;
+    live = { rpcUrl, makeFloat: () => MetalFloatGateway.fromEnv(env) };
+  }
   const session = new DemoSession({
     llm,
+    live,
     paceScale: env.PACE_SCALE ? Number(env.PACE_SCALE) : 0.6,
     approvalTimeoutMs: env.APPROVAL_TIMEOUT_MS ? Number(env.APPROVAL_TIMEOUT_MS) : 30_000,
   });
@@ -74,10 +87,12 @@ export function createEngineServer(env: NodeJS.ProcessEnv = process.env, opts: {
   const meta = (): Meta => {
     const sim = readJson<{ badge: string; runs: number; passed: boolean; generatedAt: string; clearing?: { badge?: string } }>("sim-report.json");
     return {
-      mode: "mock",
+      mode: live ? "mixed" : "mock",
       rails: [
-        { rail: "Airwallex holds", source: "simulated", detail: "MockAirwallex: enforces capture ≤ hold; sandbox client not yet run" },
-        { rail: "Metal x402 payments", source: "simulated", detail: "MockMetal: idempotent settlement; testnet not yet wired" },
+        { rail: "Airwallex holds", source: "simulated", detail: "MockAirwallex: enforces capture ≤ hold. The team's sandbox has Payments disabled for its region." },
+        live
+          ? { rail: "Metal x402 payments", source: "live", detail: `Metal testnet (eip155:63825) via Metal's x402 facilitator; agent ${payer}; providers verify each payment on chain` }
+          : { rail: "Metal x402 payments", source: "simulated", detail: "MockMetal: idempotent settlement. Run npm run engine:live for real testnet payments." },
         { rail: "Metal mandates", source: "not built", detail: "§5.3: on-chain second lock, not built yet" },
         { rail: "Metal clearing", source: "simulated", detail: "ClearingEmulator: not available to builders on testnet" },
         llm
@@ -123,7 +138,7 @@ export function createEngineServer(env: NodeJS.ProcessEnv = process.env, opts: {
       if (req.method === "POST" && url.pathname === "/api/control") {
         const action = String((await body(req)).action ?? "") as ControlAction;
         if (!CONTROLS.includes(action)) return send(res, 400, { ok: false, message: `unknown action ${action}` });
-        const r = session.control(action);
+        const r = await session.control(action);
         return send(res, r.ok ? 200 : action === "mandate_test" ? 501 : 409, r);
       }
       send(res, 404, { error: "not found" });
@@ -136,6 +151,9 @@ export function createEngineServer(env: NodeJS.ProcessEnv = process.env, opts: {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const port = Number(process.env.PORT ?? 4100);
-  const { server } = createEngineServer(process.env, { noLlm: process.argv.includes("--no-llm") });
-  server.listen(port, () => console.log(`margin engine on http://localhost:${port}  (dashboard: npm run dashboard)`));
+  const liveMetal = process.argv.includes("--live-metal");
+  const { server } = createEngineServer(process.env, { noLlm: process.argv.includes("--no-llm"), liveMetal });
+  server.listen(port, () =>
+    console.log(`margin engine on http://localhost:${port} · Metal rail: ${liveMetal ? "LIVE (testnet)" : "SIMULATED"}  (dashboard: npm run dashboard)`),
+  );
 }

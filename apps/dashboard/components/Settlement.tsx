@@ -3,6 +3,10 @@ import { fmt } from "@/lib/state";
 
 const short = (h?: string) => (h ? `${h.slice(0, 6)}…${h.slice(-4)}` : "—");
 
+function SourceBadge({ source }: { source: "live" | "simulated" }) {
+  return source === "live" ? <span className="badge badge-live">LIVE</span> : <span className="badge badge-simulated">SIM</span>;
+}
+
 export function Reconciliation({ summary }: { summary: RunSummary }) {
   const rows = [...summary.jobs.map((j) => ({ id: `Job ${j.jobId}`, ...j })), { id: "Total", ...summary.totals }];
   return (
@@ -19,8 +23,8 @@ export function Reconciliation({ summary }: { summary: RunSummary }) {
           <tr>
             <th />
             <th>Ledger paid</th>
-            <th>
-              Rail settled <span className="badge badge-simulated">SIM</span>
+            <th title={summary.rail.source === "live" ? "Each payment re-read from Metal testnet after the run" : "MockMetal's own settlement record"}>
+              {summary.rail.source === "live" ? "Settled on chain" : "Rail settled"} <SourceBadge source={summary.rail.source} />
             </th>
             <th>
               Clearing redeemed <span className="badge badge-simulated">SIM</span>
@@ -49,6 +53,8 @@ export function Reconciliation({ summary }: { summary: RunSummary }) {
       </table>
       </div>
       <p className="small muted">
+        {summary.rail.source === "live" &&
+          `Settled on chain: every payment re-read from ${summary.rail.network} after the run, USDZ sent from ${summary.rail.payer} to each provider. `}
         Float {fmt(summary.totals.floatDeposited)} deposited, {fmt(summary.totals.floatWithdrawn)} withdrawn unused. Invariant check:{" "}
         {summary.violations.length ? summary.violations.join("; ") : "0 violations"}.
         {summary.llm && ` LLM: ${summary.llm.calls} calls, ${summary.llm.failures} failed${summary.llm.tripped ? `, switched off (${summary.llm.tripped})` : ""}.`}
@@ -79,7 +85,7 @@ export function Receipts({ summary }: { summary: RunSummary }) {
                   <th>List price</th>
                   <th>Paid</th>
                   <th>
-                    Metal tx <span className="badge badge-simulated">SIM</span>
+                    Metal tx <SourceBadge source={summary.rail.source} />
                   </th>
                   <th>
                     Clearing total <span className="badge badge-simulated">SIM</span>
@@ -94,8 +100,14 @@ export function Receipts({ summary }: { summary: RunSummary }) {
                     <td>{r.providerId}</td>
                     <td className="num">{fmt(r.listPrice)}</td>
                     <td className="num">{r.status === "refused" ? `refused (asked ${fmt(r.quoted)})` : fmt(r.paid)}</td>
-                    <td className="mono" title={r.txHash ? `${r.txHash} (mock rail: not on any chain)` : undefined}>
-                      {short(r.txHash)}
+                    <td className="mono" title={r.txHash ? (r.txUrl ? r.txHash : `${r.txHash} (mock rail: not on any chain)`) : undefined}>
+                      {r.txUrl ? (
+                        <a href={r.txUrl} target="_blank" rel="noopener noreferrer">
+                          {short(r.txHash)} ↗
+                        </a>
+                      ) : (
+                        short(r.txHash)
+                      )}
                     </td>
                     <td className="num">{r.clearingTotal !== undefined ? fmt(r.clearingTotal) : "—"}</td>
                     <td className="small">{r.why ?? "—"}</td>
