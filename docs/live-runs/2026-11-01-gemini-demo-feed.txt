@@ -1,0 +1,77 @@
+LLM: gemini gemini-3.5-flash-lite (judge, explainer, report te[*] deposit $1.50 USDZ float, $0.30 kept as shared reserve
+[A] card hold authorized $1.00
+[A] [SIMULATED] clearing deposit $1.00
+[B] card hold authorized $0.75
+[B] [SIMULATED] clearing deposit $0.75
+[C] card hold authorized $0.75
+[C] [SIMULATED] clearing deposit $0.75
+[C] search: buy from search for $0.02 — search is the cheapest tier-2 option that fits
+ option that fits
+[A] Search bought from search for $0.02.
+      policy: search is the cheapest tier-2 option that fits
+[B] Search bought from search for $0.02.
+      policy: search is the cheapest tier-2 option that fits
+[B] ⚠ step analysis grew to 48 paragraphs (prompt overrun)
+[*] ⚠ model-lite slows to ~2.5s under load
+[B] Draft bought from model-lite for $0.10.
+      policy: model-lite is the cheapest tier-1 option that fits
+[A] Lookup bought from data for $0.03.
+      policy: data is the cheapest tier-2 option that fits
+[C] Scan bought from model-bargain for $0.14, skipping slow model-lite.
+      policy: model-bargain is the cheapest tier-2 option that fits; skipped slow: model-lite
+[C] Model-bargain was refused because it was quoted 420000 micros with a list price of 140000.
+      policy: quoted 420000 micros, list price 140000
+[C] Model-bargain was blocked after being quoted 420000 micros with a list price of 140000.
+      policy: quoted 420000 micros, list price 140000
+[C] Scan bought from model-std for $0.28, skipping slow model-lite.
+      policy: model-std is the cheapest tier-2 option that fits; skipped slow: model-lite
+[A] Reserved $0.16 leaving $0.14 left.
+      policy: covers the rest of the job; closest to finishing
+[C] Reserved $0.14 leaving $0.00 left.
+      policy: covers its next step; closest to finishing
+[A] Outline bought from model-std for $0.24.
+      policy: model-std is the cheapest tier-2 option that fits
+[B] Asked customer to raise hold from $0.75 to $1.24.
+      policy: projected spend $1.19 exceeds hold $0.75
+[B] customer approved
+[B] [SIMULATED] clearing deposit raised to $1.24
+[B] Airwallex incremental auth OK: hold now $1.24
+[C] Compare bought from model-std for $0.20.
+      policy: model-std is the cheapest tier-2 option that fits
+[*] [SIMULATED] clearing epoch 1 closed: 7 running totals redeemed
+[A] Body bought from model-std for $0.30, skipping slow model-lite.
+      policy: model-std is the cheapest tier-2 option that fits; skipped slow: model-lite
+[A] Budget-limited plan created with 1 steps kept and 0 dropped, costing $0.05 of $0.05 left.
+      policy: float exhausted
+[B] Budget-limited plan created with 2 steps kept and 1 dropped, costing $0.24 of $0.24 left after dropping lookup.
+      policy: float exhausted
+[C] Budget-limited plan created with 0 steps kept and 2 dropped, costing $0.00 of $0.00 left after dropping lookup and brief.
+      policy: float exhausted
+[C] finished (budget-limited)
+[A] Summary bought from model-lite for $0.05 because no fast provider fits the budget, accepting a slower one.
+      policy: model-lite is the cheapest tier-1 option that fits (no fast provider fits the budget; accepting a slower one)
+[A] finished (budget-limited)
+[B] Analysis bought from model-lite for $0.16 because no fast provider fits the budget, accepting a slower one.
+      policy: model-lite is the cheapest tier-1 option that fits (no fast provider fits the budget; accepting a slower one)
+[*] [SIMULATED] clearing epoch 2 closed: 3 running totals redeemed
+[B] Wrapup bought from model-lite for $0.08 because no fast provider fits the budget, accepting a slower one.
+      policy: model-lite is the cheapest tier-1 option that fits (no fast provider fits the budget; accepting a slower one)
+[B] finished (budget-limited)
+[*] [SIMULATED] clearing epoch 3 closed: 1 running totals redeemed
+[A] [SIMULATED] clearing final: redeemed $0.64, unused deposit $0.36 withdrawn
+[B] [SIMULATED] clearing final: redeemed $0.36, unused deposit $0.88 withdrawn
+[C] [SIMULATED] clearing final: redeemed $0.50, unused deposit $0.25 withdrawn
+[A] captured $0.64, released $0.36
+[B] captured $0.36, released $0.88
+[C] captured $0.50, released $0.25
+
+Job  Customer        Hold    Spent   Captured  Premium-only  Status
+A    Acme Research   $1.00   $0.64   $0.64     $1.90         budget_limited
+B    Birch Capital   $1.24   $0.36   $0.36     $1.55         budget_limited
+C    Cobalt Labs     $0.75   $0.50   $0.50     $1.55         budget_limited
+
+Reconciliation: ledger paid $1.50 = rail settled $1.50 = clearing redeemed $1.50 [SIMULATED] = Airwallex captured $1.50
+All invariants hold: no customer charged past their hold.
+
+LLM: 17 calls, 0 failed · judge 8 answers graded (0 fell back to neutral) · explainer 21 lines phrased (0 rejected as unfaithful, 0 batches failed) · report 0 sections fell back
+Reports: demo-report.md

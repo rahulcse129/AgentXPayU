@@ -10,16 +10,16 @@ Last updated: 2026-11-01. Submission deadline: 13 November 2026.
 | Provider payments (Metal x402) | `MockMetal` | `MetalFloatGateway`, testnet | **Not wired.** Stub with documented contract and SDK surface. |
 | Mandates (Metal) | — | planned, §5.3 | **Not started.** |
 | Clearing (Metal) | `ClearingEmulator` | none | **SIMULATED in every mode.** Not available to builders on testnet. |
-| LLM judge / explainer / report text | `TagJudge`, template lines | `LlmJudge`, `Explainer`, `ReportWritingProviders` on Gemini (`gemini-3.8-flash`) or Claude (`claude-opus-5-5`) | **Built and tested with fake LLMs.** A bad Gemini key fails in ~1 s and falls back cleanly. **Not yet run with a real key.** |
+| LLM judge / explainer / report text | `TagJudge`, template lines | `LlmJudge`, `Explainer`, `ReportWritingProviders` on Gemini (`gemini-3.5-flash-lite`) or Claude (`claude-opus-5-5`) | **LIVE on Gemini** (2026-11-01 run below). Claude path tested with fakes only. |
 | Dashboard | — | planned, §5.6 | **Not started.** |
 
-Nothing in this repo is LIVE yet. Every number on screen and in reports so far comes from the mocks or the emulator.
+The only LIVE component is the LLM, on Gemini. Every money number on screen and in reports comes from the mocks or the emulator.
 
 ## What is done
 
 - **Baseline kept green.** `npm run check` = typecheck + unit tests + 10,000-run sim + sabotage.
 - **Pinned packages.** `@metalntwx/metal-agent@0.3.3` (`npx metal-agent --version` prints `0.3.3`) and `@metalntwx/metal-pay@0.3.4`, both exact, plus `viem`.
-- **Unit tests (`test/`, 105 tests).** Every exported policy function with boundaries (exact headroom, one micro short, zero float, all providers slow, price tie broken by latency), `verifyQuote` (overquote by one micro, underquote allowed, wrong payee, wrong asset, fractional/negative), ledger idempotency conflicts, hold lifecycle, `SqliteStore` ↔ `MemoryStore` parity, and the database-level `captured <= authorized` check.
+- **Unit tests (`test/`, 110 tests).** Every exported policy function with boundaries (exact headroom, one micro short, zero float, all providers slow, price tie broken by latency), `verifyQuote` (overquote by one micro, underquote allowed, wrong payee, wrong asset, fractional/negative), ledger idempotency conflicts, hold lifecycle, `SqliteStore` ↔ `MemoryStore` parity, and the database-level `captured <= authorized` check.
 - **Adapter contract tests.** The same suites run against `MockMetal`/`MetalFloatGateway` and `MockAirwallex`/`AirwallexHoldGateway`. The live runs are skipped unless `METAL_PRIVATE_KEY`+`METAL_RPC_URL` or `AIRWALLEX_CLIENT_ID`+`AIRWALLEX_API_KEY`+`AIRWALLEX_TEST_PAYMENT_METHOD` are set.
 - **Clearing (§5.4) behind `ClearingPort`, emulated.** See below.
 - **Fix:** `npm run providers` never started on Windows, because the entry-point check compared a `file://` URL to a Windows path. It now uses `pathToFileURL`.
@@ -32,7 +32,7 @@ Code in `src/agent/`. Turned on in the demo by a key in the environment or in `.
 
 | Key set | Provider | Default model | Client |
 |---|---|---|---|
-| `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) | Gemini, preferred when set | `gemini-3.8-flash` | `GeminiLlm`, `@google/genai@2.32.0` Interactions API |
+| `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) | Gemini, preferred when set | `gemini-3.5-flash-lite` | `GeminiLlm`, `@google/genai@2.32.0` Interactions API |
 | `LLM_API_KEY` / `ANTHROPIC_API_KEY` | Claude | `claude-opus-5-5` | `AnthropicLlm`, `@anthropic-ai/sdk` |
 
 `LLM_PROVIDER=gemini|anthropic` forces one, and `LLM_MODEL` overrides the model. Gemini notes, from Google's docs and the SDK types (2026-11-01):
@@ -43,14 +43,30 @@ Code in `src/agent/`. Turned on in the demo by a key in the environment or in `.
 - Every request sends `store: false`, so Google keeps no prompts or provider outputs.
 - Any status other than `completed`, or an empty answer, is an error, and the caller falls back without the LLM.
 
-- **`LlmJudge`** returns `{ score, reason }` for an answer. Rubrics per step kind, cached by a SHA-256 of the output, scores clamped to 0..1. On any LLM failure (error, refusal, cut-off, malformed JSON) it returns the neutral score 0.7 and does not cache it. The provider's output is fenced as untrusted data. In the demo it grades model steps only, because search and data are still placeholders; those keep `TagJudge`.
-- **`Explainer`** gives one feed line per ledger event. The facts come from deterministic templates (`describe.ts`), and the policy's own `why` is kept verbatim beside the line. The LLM may only rephrase decision events. `faithful()` rejects any rephrasing that adds a number, amount or provider id not in the source, or runs to several lines. A rejected or failed rephrasing falls back to the template.
+- **`GuardedLlm`** (`guard.ts`) wraps every client. On a 429, rate limit or quota error, after 3 failures in a row, or once `LLM_MAX_CALLS` is spent, it turns the LLM off for the rest of the run, so later calls fall back at once instead of waiting. The Gemini client also disables the SDK's default 5-attempt, up-to-60-s backoff on 429.
+- **`LlmJudge`** returns `{ score, reason }` for an answer. Rubrics per step kind, cached by a SHA-256 of the output. Scores must be in 0..1; anything else counts as malformed, because live flash-lite once answered `3`, and clamping would have turned that into a perfect 1.0. On any LLM failure (error, refusal, cut-off, malformed JSON) it returns the neutral score 0.7 and does not cache it. The provider's output is fenced as untrusted data. In the demo it grades model steps only, because search and data are still placeholders; those keep `TagJudge`.
+- **`Explainer`** gives one feed line per ledger event. The facts come from deterministic templates (`describe.ts`), and the policy's own `why` is kept verbatim beside the line. The LLM may only rephrase decision events. The demo batches them, about 21 lines in one call, with each line checked on its own. `faithful()` rejects any rephrasing that adds a number, amount or provider id not in the source, or runs to several lines. A rejected or failed rephrasing falls back to the template.
 - **`ReportWritingProviders`** wraps the provider port. Quotes pass through untouched, so prices still come only from `catalog.ts`. An honest model step's delivered text becomes real prose in the provider's tier style. Junk and crash modes keep misbehaving. Search and data stay SIMULATED, and the prompt forbids citing sources. The demo writes `demo-report.md`.
 - **Deviations from the project prompt, forced by the current API:** on `claude-opus-5-5`, `temperature` and forced `tool_choice` both return 400. So the judge's "one typed tool call" is structured output (`output_config.format`, JSON schema), and "low temperature" is `effort: "low"`. Requests opt into `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`), so a classifier refusal is retried server-side on Anthropic's recommended fallback model.
 - **Proof the LLM cannot move money:** `test/agent.test.ts` runs 300 sim scenarios with hostile judges (always 0, always 1, random, out of range, unavailable, garbage) and requires zero invariant violations. Neither the judge prompt nor the writer prompt contains prices, budgets, holds or addresses; tests check this.
 - **Bug found by that test, and fixed:** with every answer judged junk, the engine looped until its 500-round guard tripped. `degradePlan` priced a step at a provider that had already failed that step, so the "fitting" plan could never be bought. The fix: `estimateRemaining` and `degradePlan` take per-step exclusions, and a no-progress round that leaves a plan unchanged drops the stuck step. Money was always settled correctly by the `finally` block. The same fix removed 14 "did not converge" crashes from the idempotency sabotage run, which is still caught.
 
-Still open for §5.5: put a real key in `.env`, run `npm run demo` once, and read `demo-report.md` for coherence.
+### Live run, 2026-11-01 (Gemini, `gemini-3.5-flash-lite`)
+
+`npm run demo` with `GEMINI_API_KEY` in `.env`. Saved in [live-runs/2026-11-01-gemini-demo-report.md](live-runs/2026-11-01-gemini-demo-report.md) and [live-runs/2026-11-01-gemini-demo-feed.txt](live-runs/2026-11-01-gemini-demo-feed.txt).
+
+- 70 s end to end, 17 LLM calls, 0 failed. 8 answers graded, 21 feed lines phrased (0 rejected as unfaithful), 8 report sections written, 0 fallbacks.
+- All invariants hold. Reconciliation is identical to the offline run: $1.50 ledger = rail = clearing [SIMULATED] = captured. The LLM changed no money outcome.
+- The reports are coherent and on topic, with the requested paragraph counts, no invented citations and no placeholder tags.
+
+What the first attempt taught us (now fixed):
+- The key is on the free tier, and `gemini-3.8-flash` allows **20 requests a day**. The first attempt used up that quota. The SDK then retried every 429 with long backoff, so calls took 4+ minutes each and the demo stalled. The fixes: `GuardedLlm`, no SDK retry on 429, the batched explainer (about 60 calls down to about 17), and `gemini-3.5-flash-lite` as the default.
+- The key was first pasted into `.env.example`, which is committed. It was moved to the git-ignored `.env` before any commit; it is not in git history.
+
+Known issues:
+- **The judge is too lenient on flash-lite.** All 8 live answers scored exactly 1.0, tier-1 and tier-2 alike, so the premium redo never triggers in the live demo. It is no money risk, but the rubric needs calibration anchors (for example "competent = 0.75; reserve 0.9+ for exceptional") and a few live runs to check, within the free-tier quota.
+- Free-tier Gemini terms may let Google use prompts and outputs to improve its products. The demo sends only made-up report topics and generated text, no customer or payment data.
+- Some phrased lines are clunky ("Reserved $0.16 leaving $0.14 left"), and the rogue-quote reason shows raw micros ("quoted 420000 micros"), because that is how `verifyQuote` words it.
 
 ## Clearing: why it is emulated
 

@@ -91,9 +91,10 @@ async function main() {
   });
 
   // The feed: the fact, the LLM's phrasing when it passed the faithfulness check, and the policy's own reason.
+  const explained = new Map((await explainer.explainAll(events)).map((x) => [x.seq, x]));
   const feed: Explanation[] = [];
   for (const e of events) {
-    const x = e.type === "fault.provider_slowed" ? slowdown(e) : await explainer.explain(e);
+    const x = e.type === "fault.provider_slowed" ? slowdown(e) : explained.get(e.seq);
     if (!x) continue;
     feed.push(x);
     console.log(x.lineSource === "llm" ? `${tag(x)} ${x.line}` : x.line);
@@ -118,7 +119,7 @@ async function main() {
 
   if (llm && writer && judge instanceof LlmJudge) {
     console.log(
-      `\nLLM: judge ${judge.calls} calls (${judge.failures} fell back to neutral) · explainer ${feed.filter((x) => x.lineSource === "llm").length} lines (${explainer.rejected} rejected as unfaithful, ${explainer.failures} failed) · report ${writer.failures} sections fell back`,
+      `\nLLM: ${llm.calls} calls, ${llm.failures} failed${llm.tripped ? `, then switched off (${llm.tripped})` : ""} · judge ${judge.calls} answers graded (${judge.failures} fell back to neutral) · explainer ${feed.filter((x) => x.lineSource === "llm").length} lines phrased (${explainer.rejected} rejected as unfaithful, ${explainer.failures} batches failed) · report ${writer.failures} sections fell back`,
     );
     writeFileSync("demo-report.md", reportMarkdown(writer, results.map((r) => ({ jobId: r.jobId, status: r.status, spent: r.spent, dropped: r.dropped }))));
     console.log("Reports: demo-report.md");

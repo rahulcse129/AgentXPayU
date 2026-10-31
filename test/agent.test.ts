@@ -6,6 +6,7 @@ import type { LedgerEvent } from "../src/ledger/ledger.ts";
 import { TagJudge, type QualityJudge } from "../src/engine/ports.ts";
 import { InProcessProviders } from "../src/providers/in-process.ts";
 import type { LlmClient } from "../src/agent/llm.ts";
+import { GuardedLlm, isRateLimit } from "../src/agent/guard.ts";
 import { LlmJudge, NEUTRAL_SCORE } from "../src/agent/judge.ts";
 import { Explainer, faithful } from "../src/agent/explainer.ts";
 import { ReportWritingProviders } from "../src/agent/report-providers.ts";
@@ -56,9 +57,15 @@ test("judge caches by output: the same answer is graded once", async () => {
   assert.equal(llm.prompts.length, 2);
 });
 
-test("judge clamps out-of-range scores", async () => {
-  assert.equal(await new LlmJudge(new FakeLlm(() => ({ score: 7, reason: "" }))).score(model, "x"), 1);
-  assert.equal(await new LlmJudge(new FakeLlm(() => ({ score: -2, reason: "" }))).score(model, "x"), 0);
+test("judge treats an out-of-range score as malformed, not as a perfect or zero grade", async () => {
+  // Seen live: gemini-3.5-flash-lite answered score 3 for a "thin" answer. Clamping would make it 1.0.
+  for (const score of [3, 7, -2, 1.0001]) {
+    const v = await new LlmJudge(new FakeLlm(() => ({ score, reason: "" }))).verdict(model, "x");
+    assert.equal(v.score, NEUTRAL_SCORE);
+    assert.equal(v.source, "fallback");
+  }
+  assert.equal(await new LlmJudge(new FakeLlm(() => ({ score: 1, reason: "" }))).score(model, "x"), 1);
+  assert.equal(await new LlmJudge(new FakeLlm(() => ({ score: 0, reason: "" }))).score(model, "x"), 0);
 });
 
 test("judge falls back to the neutral score on errors and malformed answers, and does not cache them", async () => {
@@ -136,6 +143,65 @@ test("explainer does not call the LLM for bookkeeping events or without an LLM",
   const d = await new Explainer().explain(ev("step.dropped", { stepId: "s", why: "no provider" }));
   assert.equal(d!.lineSource, "template");
   assert.equal(d!.policy, "no provider");
+});
+
+test("explainAll phrases a run's decisions in one call and checks each line on its own", async () => {
+  const events = [
+    { ...ev("agent.decision", { stepId: "outline", providerId: "model-std", cost: 240000, why: "cheapest that fits" }), seq: 1 },
+    { ...ev("hold.authorized", { holdId: "h", authorized: 750000 }), seq: 2 },
+    { ...ev("payment.refused", { providerId: "model-bargain", quoted: 30000, reason: "overquote" }), seq: 3 },
+  ];
+  const llm = new FakeLlm(() => ({ lines: ["Job A bought the outline from model-std for $0.24.", "model-bargain overcharged by 300%."] }));
+  const ex = new Explainer(llm);
+  const out = await ex.explainAll(events);
+  assert.equal(llm.prompts.length, 1);
+  assert.deepEqual(out.map((x) => [x.seq, x.lineSource]), [[1, "llm"], [2, "template"], [3, "template"]]);
+  assert.equal(ex.rejected, 1);
+  assert.equal(out[2]!.policy, "overquote");
+});
+
+test("explainAll falls back to templates when the batch answer does not line up", async () => {
+  const events = [ev("step.dropped", { stepId: "a", why: "x" }), ev("step.dropped", { stepId: "b", why: "y" })];
+  const ex = new Explainer(new FakeLlm(() => ({ lines: ["only one"] })));
+  assert.ok((await ex.explainAll(events)).every((x) => x.lineSource === "template"));
+  assert.equal(ex.failures, 1);
+});
+
+// ---------------------------------------------------------------- guard
+
+test("guard switches the LLM off for the run on a rate limit, without calling again", async () => {
+  let n = 0;
+  const inner = new FakeLlm(() => {
+    n++;
+    throw Object.assign(new Error("Rate limit exceeded (limit: 20 requests per day on Free Tier)"), { status: 429 });
+  });
+  const g = new GuardedLlm(inner);
+  await assert.rejects(g.json({ system: "", user: "", schema: {} }));
+  await assert.rejects(g.text({ system: "", user: "" }), /LLM off for this run: provider rate limit/);
+  assert.equal(n, 1);
+  assert.equal(inner.prompts.length, 1);
+  assert.equal(isRateLimit(new Error("You exceeded your current quota")), true);
+  assert.equal(isRateLimit(new Error("socket hang up")), false);
+});
+
+test("guard trips after consecutive failures, resets on success, and enforces a call budget", async () => {
+  let fail = true;
+  const g = new GuardedLlm(new FakeLlm(undefined, () => { if (fail) throw new Error("503"); return "ok"; }), { maxConsecutiveFailures: 2 });
+  await assert.rejects(g.text({ system: "", user: "" }));
+  fail = false;
+  assert.equal(await g.text({ system: "", user: "" }), "ok");
+  fail = true;
+  await assert.rejects(g.text({ system: "", user: "" }));
+  await assert.rejects(g.text({ system: "", user: "" }));
+  assert.equal(g.tripped, "2 failures in a row");
+  const b = new GuardedLlm(new FakeLlm(), { maxCalls: 1 });
+  await b.text({ system: "", user: "" });
+  await assert.rejects(b.text({ system: "", user: "" }), /call budget of 1 spent/);
+});
+
+test("judge over a tripped guard falls back to neutral immediately", async () => {
+  const g = new GuardedLlm(new FakeLlm(), { maxCalls: 0 });
+  assert.equal((await new LlmJudge(g).verdict(model, "x")).source, "fallback");
 });
 
 // ---------------------------------------------------------------- report text

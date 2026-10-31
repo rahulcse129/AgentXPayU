@@ -16,7 +16,11 @@
 import { GoogleGenAI } from "@google/genai";
 import { LlmError, type LlmClient } from "./llm.ts";
 
-export const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
+/**
+ * Google's "fastest and most cost-effective" current model. A demo run makes about 20 calls;
+ * gemini-3.8-flash allows 20 requests a day on the free tier. Override with LLM_MODEL.
+ */
+export const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite";
 
 /** The slice of the SDK we use, so tests can stand in for it. */
 export interface InteractionsApi {
@@ -30,9 +34,14 @@ export class GeminiLlm implements LlmClient {
     opts: { apiKey?: string; timeoutMs?: number; interactions?: InteractionsApi } = {},
     readonly model = DEFAULT_GEMINI_MODEL,
   ) {
+    // The SDK's default is 5 attempts with up to 60 s backoff, including on 429. A quota 429 on the
+    // free tier ("retry in 10h") then stalls each call for minutes. Retry only brief server
+    // errors, once; GuardedLlm turns the LLM off for the run on a 429.
+    const retryOptions = { attempts: 2, initialDelay: 1, maxDelay: 2, httpStatusCodes: [500, 502, 503, 504] };
     this.interactions =
       opts.interactions ??
-      (new GoogleGenAI({ apiKey: opts.apiKey, httpOptions: { timeout: opts.timeoutMs ?? 60_000 } }).interactions as unknown as InteractionsApi);
+      (new GoogleGenAI({ apiKey: opts.apiKey, httpOptions: { timeout: opts.timeoutMs ?? 30_000, retryOptions } })
+        .interactions as unknown as InteractionsApi);
   }
 
   private async call(system: string, user: string, maxTokens: number, schema?: Record<string, unknown>): Promise<string> {

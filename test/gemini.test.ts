@@ -4,6 +4,7 @@ import { GeminiLlm, DEFAULT_GEMINI_MODEL, type InteractionsApi } from "../src/ag
 import { AnthropicLlm, LlmError } from "../src/agent/llm.ts";
 import { llmFromEnv, llmProviderFromEnv } from "../src/agent/llm-config.ts";
 import { LlmJudge, NEUTRAL_SCORE } from "../src/agent/judge.ts";
+import { GuardedLlm } from "../src/agent/guard.ts";
 import type { Step } from "../src/policy/types.ts";
 
 /** Stands in for client.interactions; records the params of every call. */
@@ -83,12 +84,14 @@ test("LLM_PROVIDER overrides the inference and rejects unknown names", () => {
   assert.throws(() => llmProviderFromEnv({ LLM_PROVIDER: "openai" }), /unknown LLM_PROVIDER/);
 });
 
-test("llmFromEnv builds the right client and model", () => {
+test("llmFromEnv builds the right guarded client and model", () => {
   assert.equal(llmFromEnv({}), undefined);
-  const g = llmFromEnv({ GEMINI_API_KEY: "g" });
-  assert.ok(g instanceof GeminiLlm);
+  const g = llmFromEnv({ GEMINI_API_KEY: "g" })!;
+  assert.ok(g instanceof GuardedLlm);
+  assert.ok((g as unknown as { inner: unknown }).inner instanceof GeminiLlm);
   assert.equal(g.model, DEFAULT_GEMINI_MODEL);
   assert.equal(llmFromEnv({ LLM_PROVIDER: "gemini", LLM_API_KEY: "k", LLM_MODEL: "gemini-4-argon" })!.model, "gemini-4-argon");
-  assert.ok(llmFromEnv({ LLM_API_KEY: "a" }) instanceof AnthropicLlm);
+  assert.ok((llmFromEnv({ LLM_API_KEY: "a" }) as unknown as { inner: unknown }).inner instanceof AnthropicLlm);
   assert.throws(() => llmFromEnv({ LLM_PROVIDER: "gemini" }), /needs GEMINI_API_KEY/);
+  assert.throws(() => llmFromEnv({ GEMINI_API_KEY: "g", LLM_MAX_CALLS: "lots" }), /LLM_MAX_CALLS/);
 });

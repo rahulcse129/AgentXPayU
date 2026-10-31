@@ -62,6 +62,57 @@ export class Explainer {
     return phrased ? { ...base, line: phrased, lineSource: "llm" } : { ...base, line: fact, lineSource: "template" };
   }
 
+  /**
+   * Explain a whole run in a few calls: decision lines go to the LLM in batches of `batchSize`
+   * as one JSON array. Each returned line is checked with faithful() against its own source;
+   * a batch whose answer does not line up one-to-one falls back to templates entirely.
+   */
+  async explainAll(events: LedgerEvent[], batchSize = 40): Promise<Explanation[]> {
+    const base = events.flatMap((e) => {
+      const fact = describe(e);
+      return fact ? [{ e, fact }] : [];
+    });
+    const wanted = [...new Set(base.filter((b) => this.llm && DECISION_EVENTS.has(b.e.type)).map((b) => b.fact))].filter(
+      (f) => !this.cache.has(f),
+    );
+    for (let i = 0; i < wanted.length; i += batchSize) await this.rephraseBatch(wanted.slice(i, i + batchSize));
+    return base.map(({ e, fact }) => {
+      const phrased = DECISION_EVENTS.has(e.type) ? this.cache.get(fact) : undefined;
+      const x = { seq: e.seq, jobId: e.jobId, type: e.type, fact, policy: policyReason(e) };
+      return phrased ? { ...x, line: phrased, lineSource: "llm" as const } : { ...x, line: fact, lineSource: "template" as const };
+    });
+  }
+
+  private async rephraseBatch(facts: string[]): Promise<void> {
+    let raw: unknown;
+    try {
+      raw = await this.llm!.json({
+        system: `${SYSTEM.replace("one log line", "each log line").replace("Reply with the sentence only.", "")}\nReturn one sentence per input line, in the same order, as {"lines": [...]}.`,
+        user: facts.map((f, i) => `${i + 1}. ${f}`).join("\n"),
+        schema: {
+          type: "object",
+          properties: { lines: { type: "array", items: { type: "string" }, minItems: facts.length, maxItems: facts.length } },
+          required: ["lines"],
+          additionalProperties: false,
+        },
+        maxTokens: 80 * facts.length + 400,
+      });
+    } catch {
+      this.failures++;
+      return;
+    }
+    const lines = (raw as { lines?: unknown })?.lines;
+    if (!Array.isArray(lines) || lines.length !== facts.length) {
+      this.failures++;
+      return;
+    }
+    facts.forEach((fact, i) => {
+      const out = typeof lines[i] === "string" ? (lines[i] as string).trim() : "";
+      if (faithful(fact, out)) this.cache.set(fact, out);
+      else this.rejected++;
+    });
+  }
+
   private async rephrase(fact: string): Promise<string | null> {
     const hit = this.cache.get(fact);
     if (hit) return hit;

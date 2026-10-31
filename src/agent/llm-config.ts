@@ -5,9 +5,14 @@
  *   GEMINI_API_KEY (or GOOGLE_API_KEY)   → Gemini
  *   LLM_API_KEY / ANTHROPIC_API_KEY      → Claude (LLM_API_KEY goes to Gemini when LLM_PROVIDER=gemini)
  *   LLM_MODEL                        optional model override for whichever provider is used
+ *   LLM_MAX_CALLS                    optional cap on LLM calls per run (free-tier quotas)
+ *
+ * The client comes wrapped in GuardedLlm, so a rate limit or quota error turns the LLM off for
+ * the rest of the run instead of slowing every later call.
  */
 import { AnthropicLlm, DEFAULT_LLM_MODEL, type LlmClient } from "./llm.ts";
 import { DEFAULT_GEMINI_MODEL, GeminiLlm } from "./gemini.ts";
+import { GuardedLlm } from "./guard.ts";
 
 export type LlmProvider = "gemini" | "anthropic";
 
@@ -21,7 +26,15 @@ export function llmProviderFromEnv(env: NodeJS.ProcessEnv = process.env): LlmPro
   return undefined;
 }
 
-export function llmFromEnv(env: NodeJS.ProcessEnv = process.env): LlmClient | undefined {
+export function llmFromEnv(env: NodeJS.ProcessEnv = process.env): GuardedLlm | undefined {
+  const inner = rawLlmFromEnv(env);
+  if (!inner) return undefined;
+  const maxCalls = env.LLM_MAX_CALLS ? Number(env.LLM_MAX_CALLS) : undefined;
+  if (maxCalls !== undefined && !(Number.isInteger(maxCalls) && maxCalls >= 0)) throw new Error(`LLM_MAX_CALLS must be a whole number, got ${env.LLM_MAX_CALLS}`);
+  return new GuardedLlm(inner, { maxCalls });
+}
+
+function rawLlmFromEnv(env: NodeJS.ProcessEnv): LlmClient | undefined {
   const provider = llmProviderFromEnv(env);
   const model = env.LLM_MODEL?.trim() || undefined;
   if (provider === "gemini") {
