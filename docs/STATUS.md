@@ -10,7 +10,7 @@ Last updated: 2026-11-01. Submission deadline: 13 November 2026.
 | Provider payments (Metal x402) | `MockMetal` | `MetalFloatGateway`, testnet | **Not wired.** Stub with documented contract and SDK surface. |
 | Mandates (Metal) | — | planned, §5.3 | **Not started.** |
 | Clearing (Metal) | `ClearingEmulator` | none | **SIMULATED in every mode.** Not available to builders on testnet. |
-| LLM judge / explainer | `TagJudge` | planned, §5.5 | **Not started.** |
+| LLM judge / explainer / report text | `TagJudge`, template lines | `LlmJudge`, `Explainer`, `ReportWritingProviders` on `claude-opus-5-5` | **Built and tested with a fake LLM. Not yet run against the real API** (needs `LLM_API_KEY`). |
 | Dashboard | — | planned, §5.6 | **Not started.** |
 
 Nothing in this repo is LIVE yet. Every number on screen and in reports so far comes from the mocks or the emulator.
@@ -19,10 +19,23 @@ Nothing in this repo is LIVE yet. Every number on screen and in reports so far c
 
 - **Baseline kept green.** `npm run check` = typecheck + unit tests + 10,000-run sim + sabotage.
 - **Pinned packages.** `@metalntwx/metal-agent@0.3.3` (`npx metal-agent --version` prints `0.3.3`) and `@metalntwx/metal-pay@0.3.4`, both exact, plus `viem`.
-- **Unit tests (`test/`, 81 tests).** Every exported policy function with boundaries (exact headroom, one micro short, zero float, all providers slow, price tie broken by latency), `verifyQuote` (overquote by one micro, underquote allowed, wrong payee, wrong asset, fractional/negative), ledger idempotency conflicts, hold lifecycle, `SqliteStore` ↔ `MemoryStore` parity, and the database-level `captured <= authorized` check.
+- **Unit tests (`test/`, 98 tests).** Every exported policy function with boundaries (exact headroom, one micro short, zero float, all providers slow, price tie broken by latency), `verifyQuote` (overquote by one micro, underquote allowed, wrong payee, wrong asset, fractional/negative), ledger idempotency conflicts, hold lifecycle, `SqliteStore` ↔ `MemoryStore` parity, and the database-level `captured <= authorized` check.
 - **Adapter contract tests.** The same suites run against `MockMetal`/`MetalFloatGateway` and `MockAirwallex`/`AirwallexHoldGateway`. The live runs are skipped unless `METAL_PRIVATE_KEY`+`METAL_RPC_URL` or `AIRWALLEX_CLIENT_ID`+`AIRWALLEX_API_KEY`+`AIRWALLEX_TEST_PAYMENT_METHOD` are set.
 - **Clearing (§5.4) behind `ClearingPort`, emulated.** See below.
 - **Fix:** `npm run providers` never started on Windows, because the entry-point check compared a `file://` URL to a Windows path. It now uses `pathToFileURL`.
+
+## Agent intelligence (§5.5)
+
+Code in `src/agent/`. Turned on in the demo by `LLM_API_KEY` (or `ANTHROPIC_API_KEY` / an `ant auth login` profile). Without one, `npm run demo` stays offline and deterministic.
+
+- **`LlmJudge`** returns `{ score, reason }` for an answer. Rubrics per step kind, cached by a SHA-256 of the output, scores clamped to 0..1. On any LLM failure (error, refusal, cut-off, malformed JSON) it returns the neutral score 0.7 and does not cache it. The provider's output is fenced as untrusted data. In the demo it grades model steps only, because search and data are still placeholders; those keep `TagJudge`.
+- **`Explainer`** gives one feed line per ledger event. The facts come from deterministic templates (`describe.ts`), and the policy's own `why` is kept verbatim beside the line. The LLM may only rephrase decision events. `faithful()` rejects any rephrasing that adds a number, amount or provider id not in the source, or runs to several lines. A rejected or failed rephrasing falls back to the template.
+- **`ReportWritingProviders`** wraps the provider port. Quotes pass through untouched, so prices still come only from `catalog.ts`. An honest model step's delivered text becomes real prose in the provider's tier style. Junk and crash modes keep misbehaving. Search and data stay SIMULATED, and the prompt forbids citing sources. The demo writes `demo-report.md`.
+- **Deviations from the project prompt, forced by the current API:** on `claude-opus-5-5`, `temperature` and forced `tool_choice` both return 400. So the judge's "one typed tool call" is structured output (`output_config.format`, JSON schema), and "low temperature" is `effort: "low"`. Requests opt into `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`), so a classifier refusal is retried server-side on Anthropic's recommended fallback model.
+- **Proof the LLM cannot move money:** `test/agent.test.ts` runs 300 sim scenarios with hostile judges (always 0, always 1, random, out of range, unavailable, garbage) and requires zero invariant violations. Neither the judge prompt nor the writer prompt contains prices, budgets, holds or addresses; tests check this.
+- **Bug found by that test, and fixed:** with every answer judged junk, the engine looped until its 500-round guard tripped. `degradePlan` priced a step at a provider that had already failed that step, so the "fitting" plan could never be bought. The fix: `estimateRemaining` and `degradePlan` take per-step exclusions, and a no-progress round that leaves a plan unchanged drops the stuck step. Money was always settled correctly by the `finally` block. The same fix removed 14 "did not converge" crashes from the idempotency sabotage run, which is still caught.
+
+Still open for §5.5: run `LLM_API_KEY=… npm run demo` once against the real API and read `demo-report.md` for coherence.
 
 ## Clearing: why it is emulated
 

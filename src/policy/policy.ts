@@ -216,16 +216,22 @@ export function shouldEscalate(args: {
 
 // ---------------------------------------------------------------- projections
 
-/** Cheapest possible cost of the remaining steps, ignoring latency. Used for hold and reserve planning. */
+/**
+ * Cheapest possible cost of the remaining steps, ignoring latency. Used for hold and reserve planning.
+ * `excluded` (stepId -> provider ids) leaves out providers that already failed that step, so the
+ * estimate prices what can actually still be bought.
+ */
 export function estimateRemaining(
   steps: Step[],
   providers: ProviderSpec[],
   health: ReadonlyMap<string, ProviderHealth>,
+  excluded?: ReadonlyMap<string, ReadonlySet<string>>,
 ): Micros {
   let total = 0;
   for (const step of steps) {
+    const skip = excluded?.get(step.id);
     const costs = providers
-      .filter((p) => p.kind === step.kind && p.tier >= step.minTier && !health.get(p.id)?.blocked)
+      .filter((p) => p.kind === step.kind && p.tier >= step.minTier && !health.get(p.id)?.blocked && !skip?.has(p.id))
       .map((p) => stepCost(p, step));
     if (costs.length) total += Math.min(...costs);
   }
@@ -271,6 +277,7 @@ export function degradePlan(
   room: Micros,
   providers: ProviderSpec[],
   health: ReadonlyMap<string, ProviderHealth>,
+  excluded?: ReadonlyMap<string, ReadonlySet<string>>,
 ): { steps: Step[]; dropped: string[]; note: string } {
   const dropped: string[] = [];
   let steps = remaining.filter((s) => {
@@ -279,7 +286,7 @@ export function degradePlan(
   });
   steps = steps.map((s) => (s.kind === "model" ? { ...s, minTier: 1 as Tier, premiumEligible: false } : s));
 
-  let cost = estimateRemaining(steps, providers, health);
+  let cost = estimateRemaining(steps, providers, health, excluded);
   // Shrink model steps one paragraph at a time, largest first, until the plan fits.
   while (cost > room) {
     const biggest = steps
@@ -287,14 +294,14 @@ export function degradePlan(
       .sort((a, b) => b.units - a.units)[0];
     if (!biggest) break;
     steps = steps.map((s) => (s === biggest ? { ...s, units: s.units - 1 } : s));
-    cost = estimateRemaining(steps, providers, health);
+    cost = estimateRemaining(steps, providers, health, excluded);
   }
   // Still over: drop trailing steps. The job ends with a partial, clearly labelled answer.
   while (cost > room && steps.length > 0) {
     const last = steps[steps.length - 1]!;
     dropped.push(last.id);
     steps = steps.slice(0, -1);
-    cost = estimateRemaining(steps, providers, health);
+    cost = estimateRemaining(steps, providers, health, excluded);
   }
   return {
     steps,

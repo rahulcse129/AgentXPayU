@@ -215,6 +215,18 @@ test("estimateRemaining sums the cheapest eligible provider per step, skipping b
   assert.equal(estimateRemaining([model(3), search], noRogue, h), cents(6) + cents(2));
 });
 
+test("estimateRemaining skips providers that already failed that step, and only that step", () => {
+  const excluded = new Map([["a", new Set(["model-lite"])]]);
+  const steps = [model(3, { id: "a" }), model(3, { id: "b" })];
+  assert.equal(estimateRemaining(steps, noRogue, health(), excluded), cents(6) + cents(3));
+});
+
+test("degradePlan prices steps at providers still available, so its plan can actually be bought", () => {
+  const excluded = new Map([["a", new Set(["model-lite"])]]);
+  const r = degradePlan([model(3, { id: "a" })], cents(4), noRogue, health(), excluded);
+  assert.deepEqual(r.steps.map((s) => s.units), [2]);
+});
+
 // ---------------------------------------------------------------- hold increases
 
 test("planHoldIncrease returns null when the plan fits exactly", () => {

@@ -227,7 +227,12 @@ export class Orchestrator {
         // Everyone is waiting for float that nobody will free: shrink plans to fit what each has.
         if (!progressed) {
           for (const s of active.filter((x) => !x.finished)) {
+            const before = JSON.stringify(s.remaining);
             this.degrade(s, Math.min(headroom(this.budget(s)), this.floatLeft(s)), "float exhausted");
+            // A plan that "fits" on paper but still cannot be bought must not spin: drop the stuck step.
+            if (s.remaining.length > 0 && JSON.stringify(s.remaining) === before) {
+              this.drop(s, s.remaining[0]!, "no provider still available fits what is left");
+            }
             if (s.remaining.length === 0) this.finish(s);
           }
         }
@@ -390,16 +395,18 @@ export class Orchestrator {
       return { kind: "no_delivery" };
     }
     this.health.set(p.id, recordLatency(this.health.get(p.id)!, delivered.latencyMs, policy));
-    const score = await judge.score(step, delivered.output);
+    const verdict = judge.verdict ? await judge.verdict(step, delivered.output) : { score: await judge.score(step, delivered.output) };
+    const { score } = verdict;
+    const judged = verdict.reason ? { reason: verdict.reason, judge: verdict.source } : {};
     const before = this.health.get(p.id)!;
     const after = recordQuality(before, score, policy);
     this.health.set(p.id, after);
     if (after.blocked && !before.blocked) ledger.log(jobId, "provider.blocked", { providerId: p.id, why: after.blockReason });
     if (score < policy.junkThreshold) {
-      ledger.log(jobId, "answer.junk", { providerId: p.id, score });
+      ledger.log(jobId, "answer.junk", { providerId: p.id, score, ...judged });
       return { kind: "junk" };
     }
-    ledger.log(jobId, "answer.scored", { providerId: p.id, score });
+    ledger.log(jobId, "answer.scored", { providerId: p.id, score, ...judged });
     return { kind: "ok", output: delivered.output, score };
   }
 
@@ -604,7 +611,7 @@ export class Orchestrator {
   }
 
   private degrade(s: JobState, room: Micros, why: string) {
-    const plan = degradePlan(s.remaining, Math.max(0, room), this.d.catalog, this.health);
+    const plan = degradePlan(s.remaining, Math.max(0, room), this.d.catalog, this.health, s.failedProviders);
     s.remaining = plan.steps;
     s.dropped.push(...plan.dropped);
     s.limited = true;

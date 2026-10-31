@@ -11,7 +11,7 @@ import { MockMetal } from "../payments/mock-metal.ts";
 import { InProcessProviders } from "../providers/in-process.ts";
 import type { ProviderMode } from "../providers/logic.ts";
 import { Orchestrator, type JobResult, type JobSpec, type Sabotage } from "../engine/orchestrator.ts";
-import { ScriptedCustomers, TagJudge, type ApprovalAnswer, type ProviderPort } from "../engine/ports.ts";
+import { ScriptedCustomers, TagJudge, type ApprovalAnswer, type ProviderPort, type QualityJudge } from "../engine/ports.ts";
 import { ClearingEmulator } from "../clearing/emulator.ts";
 import { EMULATOR_TEST_KEY, Eip712Signer, HmacSigner } from "../clearing/signer.ts";
 import { between, pick, seeded } from "./rng.ts";
@@ -114,7 +114,7 @@ export class RecordingProviders implements ProviderPort {
   }
 }
 
-export async function runScenario(sc: Scenario, sabotage?: Sabotage): Promise<RunOutcome> {
+export async function runScenario(sc: Scenario, sabotage?: Sabotage, opts: { judge?: QualityJudge } = {}): Promise<RunOutcome> {
   const rng = seeded(sc.seed ^ 0x9e3779b9);
   let clock = 0;
   const ledger = new Ledger(new MemoryStore(), () => ++clock);
@@ -132,7 +132,7 @@ export async function runScenario(sc: Scenario, sabotage?: Sabotage): Promise<Ru
     holds: airwallex,
     float: metal,
     providers,
-    judge: new TagJudge(),
+    judge: opts.judge ?? new TagJudge(),
     customers,
     clearing,
     catalog: CATALOG,

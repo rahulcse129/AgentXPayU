@@ -18,6 +18,15 @@ export interface ProviderPort {
  */
 export interface QualityJudge {
   score(step: Step, output: string): Promise<number>;
+  /** Optional: the score with a one-line reason, for the feed. The score must equal score()'s. */
+  verdict?(step: Step, output: string): Promise<Verdict>;
+}
+
+export interface Verdict {
+  score: number;
+  reason?: string;
+  /** "llm", "cache", or "fallback" when the LLM was unavailable and a neutral score was used. */
+  source?: string;
 }
 
 export type ApprovalAnswer = "approved" | "declined" | "timeout";

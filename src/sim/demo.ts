@@ -3,7 +3,13 @@
  * Three jobs, holds $1.00 / $0.75 / $0.75, only 1.50 USDZ of float.
  * Midway: job B's prompt runs 4x over and the 1¢ model slows down. The rogue provider overquotes.
  *
- *   npm run demo        (also writes demo-events.json for the dashboard)
+ *   npm run demo        offline and deterministic (TagJudge, template feed lines)
+ *   LLM_API_KEY=… npm run demo
+ *                       adds the LLM: a judge that grades model answers, an explainer that phrases
+ *                       each decision, and real report text behind the mock-priced providers.
+ *                       Also writes demo-report.md.
+ *
+ * Always writes demo-events.json (events, results, feed) for the dashboard.
  */
 import { writeFileSync } from "node:fs";
 import { cents, fmt, usd } from "../money.ts";
@@ -14,9 +20,13 @@ import { MockAirwallex } from "../payments/mock-airwallex.ts";
 import { MockMetal } from "../payments/mock-metal.ts";
 import { InProcessProviders } from "../providers/in-process.ts";
 import { Orchestrator, type JobSpec } from "../engine/orchestrator.ts";
-import { ScriptedCustomers, TagJudge } from "../engine/ports.ts";
+import { ScriptedCustomers, TagJudge, type ProviderPort, type QualityJudge } from "../engine/ports.ts";
 import { ClearingEmulator } from "../clearing/emulator.ts";
 import { EMULATOR_TEST_KEY, Eip712Signer } from "../clearing/signer.ts";
+import { AnthropicLlm } from "../agent/llm.ts";
+import { LlmJudge } from "../agent/judge.ts";
+import { Explainer, type Explanation } from "../agent/explainer.ts";
+import { ReportWritingProviders } from "../agent/report-providers.ts";
 import { checkInvariants, RecordingProviders } from "./harness.ts";
 import { seeded } from "./rng.ts";
 
@@ -32,56 +42,37 @@ export const DEMO_JOBS: JobSpec[] = [
   { id: "C", customer: "Cobalt Labs", hold: usd(0.75), steps: [search("search"), m("scan", 14, 1), m("compare", 10, 2), data("lookup"), m("brief", 6, 1)] },
 ];
 
-const describe = (e: LedgerEvent): string | null => {
-  const d = e.data;
-  const j = e.jobId ? `[${e.jobId}]` : "[*]";
-  switch (e.type) {
-    case "float.deposited": return `${j} deposit ${fmt(Number(d.amount))} USDZ float, ${fmt(Number(d.reserve))} kept as shared reserve`;
-    case "hold.authorized": return `${j} card hold authorized ${fmt(Number(d.authorized))}`;
-    case "fault.step_changed": return `${j} ⚠ step ${d.stepId} grew to ${d.units} paragraphs (prompt overrun)`;
-    case "agent.decision": return `${j} ${d.stepId}: buy from ${d.providerId} for ${fmt(Number(d.cost))} — ${d.why}`;
-    case "payment.refused": return `${j} ✋ refused ${d.providerId}: ${d.reason}`;
-    case "provider.blocked": return `${j} ⛔ ${d.providerId} blocked (${d.why})`;
-    case "answer.junk": return `${j} ✋ ${d.providerId} returned junk (score ${d.score}); buying elsewhere`;
-    case "provider.no_delivery": return `${j} ✋ ${d.providerId} took payment but did not deliver`;
-    case "agent.premium_check": return d.escalate ? `${j} ★ premium redo: ${d.why}` : null;
-    case "reserve.granted": return `${j} reserve +${fmt(Number(d.amount))} (${d.why}); ${fmt(Number(d.reserveLeft))} left`;
-    case "hold.increase_requested": return `${j} ask customer: raise hold ${fmt(Number(d.from))} → ${fmt(Number(d.to))}`;
-    case "hold.increase_answer": return `${j} customer ${d.answer}`;
-    case "hold.incremented": return `${j} Airwallex incremental auth OK: hold now ${fmt(Number(d.to))}`;
-    case "job.degraded": return `${j} budget-limited plan (${d.why}): ${d.note}${(d.dropped as string[]).length ? `; dropped ${(d.dropped as string[]).join(", ")}` : ""}`;
-    case "step.dropped": return `${j} dropped ${d.stepId} (${d.why})`;
-    case "job.finished": return `${j} finished${d.limited ? " (budget-limited)" : ""}${Number(d.returnedToPool) ? `; ${fmt(Number(d.returnedToPool))} float back to pool` : ""}`;
-    case "hold.captured": return `${j} captured ${fmt(Number(d.captured))}, released ${fmt(Number(d.released))}`;
-    case "hold.cancelled": return `${j} hold cancelled, released ${fmt(Number(d.released))}`;
-    case "float.withdrawn": return `${j} withdrew unused float ${fmt(Number(d.amount))} USDZ`;
-    case "clearing.deposit_opened": return `${j} [SIMULATED] clearing deposit ${fmt(Number(d.amount))}`;
-    case "clearing.deposit_raised": return `${j} [SIMULATED] clearing deposit raised to ${fmt(Number(d.amount))}`;
-    case "clearing.epoch_settled": return Number(d.redemptions) ? `${j} [SIMULATED] clearing epoch ${d.epoch} closed: ${d.redemptions} running totals redeemed` : null;
-    case "clearing.withdrawn": return `${j} [SIMULATED] clearing final: redeemed ${fmt(Number(d.redeemed))}, unused deposit ${fmt(Number(d.amount))} withdrawn`;
-    default: return null;
-  }
-};
+export const DEMO_TOPICS = new Map([
+  ["A", "How small online retailers can cut card-payment costs"],
+  ["B", "Risks of letting AI agents make purchases on a company card"],
+  ["C", "Choosing between open-weight and hosted language models for a startup"],
+]);
+
+const useLlm = Boolean(process.env.LLM_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
 
 async function main() {
   const rng = seeded(42);
   let clock = 0;
   const events: LedgerEvent[] = [];
-  const ledger = new Ledger(new MemoryStore(), () => ++clock, (e) => {
-    events.push(e);
-    const line = describe(e);
-    if (line) console.log(line);
-  });
+  const ledger = new Ledger(new MemoryStore(), () => ++clock, (e) => events.push(e));
   const airwallex = new MockAirwallex();
   const metal = new MockMetal();
-  const providers = new InProcessProviders(CATALOG, rng);
-  providers.control(ROGUE_PROVIDER_ID, { mode: "overquote", overquoteFactor: 3 });
+  const mockProviders = new InProcessProviders(CATALOG, rng);
+  mockProviders.control(ROGUE_PROVIDER_ID, { mode: "overquote", overquoteFactor: 3 });
   const customers = new ScriptedCustomers((req) => (req.jobId === "B" ? "approved" : "declined"));
+
+  const llm = useLlm ? AnthropicLlm.fromEnv() : undefined;
+  const writer = llm ? new ReportWritingProviders(mockProviders, llm, DEMO_TOPICS, (id) => mockProviders.get(id).mode) : undefined;
+  const providers: ProviderPort = writer ?? mockProviders;
+  // Search and data are still placeholders, so the LLM grades model answers only.
+  const judge: QualityJudge = llm ? new LlmJudge(llm, { kinds: ["model"], other: new TagJudge() }) : new TagJudge();
+  const explainer = new Explainer(llm);
+  console.log(llm ? `LLM: ${llm.model} (judge, explainer, report text)\n` : "LLM: off (set LLM_API_KEY for the judge, explainer and report text)\n");
 
   const recorder = new RecordingProviders(providers);
   const clearing = new ClearingEmulator(new Eip712Signer(EMULATOR_TEST_KEY));
   const engine = new Orchestrator({
-    ledger, holds: airwallex, float: metal, providers: recorder, judge: new TagJudge(), customers, clearing,
+    ledger, holds: airwallex, float: metal, providers: recorder, judge, customers, clearing,
     catalog: CATALOG, policy: DEFAULT_POLICY, rng,
   });
 
@@ -91,11 +82,21 @@ async function main() {
     onRound: (round, eng) => {
       if (round === 2) {
         eng.mutateStep("B", "analysis", (s) => ({ ...s, units: s.units * 4 }));
-        providers.control("model-lite", { latencyMs: 2500 });
-        console.log("[*] ⚠ model-lite slows to ~2.5s under load");
+        mockProviders.control("model-lite", { latencyMs: 2500 });
+        ledger.log(null, "fault.provider_slowed", { providerId: "model-lite", latencyMs: 2500 });
       }
     },
   });
+
+  // The feed: the fact, the LLM's phrasing when it passed the faithfulness check, and the policy's own reason.
+  const feed: Explanation[] = [];
+  for (const e of events) {
+    const x = e.type === "fault.provider_slowed" ? slowdown(e) : await explainer.explain(e);
+    if (!x) continue;
+    feed.push(x);
+    console.log(x.lineSource === "llm" ? `${tag(x)} ${x.line}` : x.line);
+    if (x.lineSource === "llm" || (x.policy && !x.line.includes(x.policy))) console.log(`      policy: ${x.policy ?? "—"}`);
+  }
 
   console.log("\nJob  Customer        Hold    Spent   Captured  Premium-only  Status");
   for (const r of results) {
@@ -112,7 +113,37 @@ async function main() {
     `\nReconciliation: ledger paid ${fmt(spent)} = rail settled ${fmt(metal.totalSettled())} = clearing redeemed ${fmt(redeemed)} [SIMULATED] = Airwallex captured ${fmt(captured)}`,
   );
   console.log(v.length ? `VIOLATIONS:\n  ${v.join("\n  ")}` : "All invariants hold: no customer charged past their hold.");
-  writeFileSync("demo-events.json", JSON.stringify({ jobs: DEMO_JOBS, results, events }, null, 2));
+
+  if (llm && writer && judge instanceof LlmJudge) {
+    console.log(
+      `\nLLM: judge ${judge.calls} calls (${judge.failures} fell back to neutral) · explainer ${feed.filter((x) => x.lineSource === "llm").length} lines (${explainer.rejected} rejected as unfaithful, ${explainer.failures} failed) · report ${writer.failures} sections fell back`,
+    );
+    writeFileSync("demo-report.md", reportMarkdown(writer, results.map((r) => ({ jobId: r.jobId, status: r.status, spent: r.spent, dropped: r.dropped }))));
+    console.log("Reports: demo-report.md");
+  }
+  writeFileSync("demo-events.json", JSON.stringify({ jobs: DEMO_JOBS, results, events, feed }, null, 2));
+}
+
+const tag = (x: Explanation) => (x.jobId ? `[${x.jobId}]` : "[*]");
+
+function slowdown(e: LedgerEvent): Explanation {
+  const line = `[*] ⚠ ${e.data.providerId} slows to ~${(Number(e.data.latencyMs) / 1000).toFixed(1)}s under load`;
+  return { seq: e.seq, jobId: null, type: e.type, fact: line, policy: null, line, lineSource: "template" };
+}
+
+function reportMarkdown(
+  writer: ReportWritingProviders,
+  results: { jobId: string; status: string; spent: number; dropped: string[] }[],
+): string {
+  const out = ["# Margin demo reports", "", "Model sections written by an LLM behind mock-priced providers. Search and data steps are SIMULATED; no sources are cited.", ""];
+  for (const r of results) {
+    const spec = DEMO_JOBS.find((j) => j.id === r.jobId)!;
+    out.push(`## ${spec.customer}: ${DEMO_TOPICS.get(r.jobId)}`, "", `Job ${r.jobId} · ${r.status} · spent ${fmt(r.spent)}${r.dropped.length ? ` · dropped: ${r.dropped.join(", ")}` : ""}`, "");
+    for (const s of writer.report(r.jobId)) {
+      out.push(`### ${s.stepId} (${s.providerId}${s.source === "placeholder" ? ", placeholder" : ""})`, "", s.text, "");
+    }
+  }
+  return out.join("\n");
 }
 
 main();
