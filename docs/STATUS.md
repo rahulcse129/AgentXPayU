@@ -106,7 +106,7 @@ Result of `npm run sim` (10,000 runs): **0 violations**. 143,996 running totals 
    - `npm run smoke:airwallex` is ready. It refuses non-sandbox hosts, uses Airwallex's published always-succeed Visa test card, and reads each intent back so the increment semantics (new total vs delta) come from the sandbox's own behaviour.
 2. **Metal testnet:** RPC endpoint and agent key **in place and verified 2026-11-01.**
    - The console endpoint (network `alta-testnet`) answers chain ID **63825**, the `eip155:63825` that `metal-pay` names for testnet.
-   - Agent address: `0xbf3C4a9e8E907Ae6e2c6Ac80A3b51B94D740f696`. Its USDZ balance is **0, so it needs the faucet** (`npx metal-agent fund <address> --network testnet`).
+   - Agent address: `0xbf3C4a9e8E907Ae6e2c6Ac80A3b51B94D740f696`. **Funded from the testnet faucet: 100 USDZ** (checked 2026-11-01 at block 11,258,522; native and token balances are the same number).
    - **USDZ** is at `0x…B5d5`, has **18 decimals**, and is also the gas token, so the native balance and the USDZ balance are the same thing. Our ledger counts in micros (6 decimals): the live adapter must convert by exactly ×10¹² and never round.
    - Still to do: the owner account for mandates (`metal-agent account create`, needs the RPC), then the adapter itself.
 3. **Design decision for mandates (§5.3):** with a mandate, the agent pays *from the owner's MetalAccount* (`createMandatePaymentClient`), not from a float wallet it holds. So `FloatGateway.deposit` becomes "fund the owner account and bind the mandate", and `withdraw` becomes "revoke and leave the rest in the owner account". Rahul should confirm this before `MetalFloatGateway` is written.
