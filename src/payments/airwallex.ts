@@ -24,6 +24,20 @@ export interface AirwallexConfig {
   apiKey: string;
   baseUrl?: string;
   currency?: string;
+  /** Account ID for `x-login-as`, needed when a scoped key is linked to more than one account. */
+  loginAs?: string;
+}
+
+/** The fields of a PaymentIntent we read back. Amounts are decimal major units. */
+export interface AirwallexIntent {
+  id: string;
+  status: string;
+  amount: number;
+  currency: string;
+  captured_amount?: number;
+  merchant_order_id?: string;
+  latest_payment_attempt?: { status?: string; amount?: number; captured_amount?: number; authorization_code?: string; [k: string]: unknown };
+  [k: string]: unknown;
 }
 
 export class AirwallexHoldGateway implements HoldGateway {
@@ -32,7 +46,8 @@ export class AirwallexHoldGateway implements HoldGateway {
   private readonly currency: string;
 
   constructor(private readonly cfg: AirwallexConfig) {
-    this.baseUrl = cfg.baseUrl ?? "https://api-demo.airwallex.com";
+    // The sandbox host in Airwallex's docs; api-demo.airwallex.com reaches the same sandbox.
+    this.baseUrl = cfg.baseUrl || "https://api.sandbox.airwallex.com";
     this.currency = cfg.currency ?? "USD";
   }
 
@@ -40,14 +55,23 @@ export class AirwallexHoldGateway implements HoldGateway {
     const clientId = process.env.AIRWALLEX_CLIENT_ID;
     const apiKey = process.env.AIRWALLEX_API_KEY;
     if (!clientId || !apiKey) throw new Error("set AIRWALLEX_CLIENT_ID and AIRWALLEX_API_KEY (sandbox)");
-    return new AirwallexHoldGateway({ clientId, apiKey, baseUrl: process.env.AIRWALLEX_BASE_URL });
+    return new AirwallexHoldGateway({
+      clientId,
+      apiKey,
+      baseUrl: process.env.AIRWALLEX_BASE_URL,
+      loginAs: process.env.AIRWALLEX_LOGIN_AS || undefined,
+    });
   }
 
   private async auth(): Promise<string> {
     if (this.token && this.token.expiresAt > Date.now() + 60_000) return this.token.value;
     const res = await fetch(`${this.baseUrl}/api/v1/authentication/login`, {
       method: "POST",
-      headers: { "x-client-id": this.cfg.clientId, "x-api-key": this.cfg.apiKey },
+      headers: {
+        "x-client-id": this.cfg.clientId,
+        "x-api-key": this.cfg.apiKey,
+        ...(this.cfg.loginAs ? { "x-login-as": this.cfg.loginAs } : {}),
+      },
     });
     if (!res.ok) throw new Error(`airwallex login failed: ${res.status} ${await res.text()}`);
     const body = (await res.json()) as { token: string; expires_at?: string };
@@ -83,19 +107,33 @@ export class AirwallexHoldGateway implements HoldGateway {
       merchant_order_id: `margin-${jobId}`,
       amount: toMajor(amount),
       currency: this.currency,
-      payment_method_options: {
-        // pre_auth is required for incremental authorization; Visa and Mastercard only.
-        card: { authorization_type: "pre_auth" }, // VERIFY: accepted on create
-      },
     });
     if (paymentMethod) {
+      // Per the API reference, authorization_type and auto_capture are "only applicable when
+      // payment_method is provided", so they go on confirm, not create. pre_auth is what makes
+      // increment_authorization possible (Visa and Mastercard only); auto_capture false keeps it a hold.
       await this.post(`/api/v1/pa/payment_intents/${intent.id}/confirm`, {
         request_id: `margin-${jobId}-confirm`,
         payment_method: paymentMethod,
-        payment_method_options: { card: { auto_capture: false } },
+        payment_method_options: { card: { authorization_type: "pre_auth", auto_capture: false } },
       });
     }
     return { holdId: intent.id };
+  }
+
+  /** Read an intent back: status and amounts, for the smoke test, receipts and the startup sweeper. */
+  async retrieve(holdId: string): Promise<AirwallexIntent> {
+    const token = await this.auth();
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/api/v1/pa/payment_intents/${holdId}`, { headers: { authorization: `Bearer ${token}` } });
+    } catch (e) {
+      throw new TransientError(`airwallex retrieve ${holdId}: ${String(e)}`);
+    }
+    const text = await res.text();
+    if (res.status >= 500) throw new TransientError(`airwallex retrieve ${holdId}: ${res.status} ${text}`);
+    if (!res.ok) throw new Error(`airwallex retrieve ${holdId}: ${res.status} ${text}`);
+    return JSON.parse(text) as AirwallexIntent;
   }
 
   async increment(holdId: string, newTotal: Micros) {

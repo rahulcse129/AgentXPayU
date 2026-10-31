@@ -16,7 +16,8 @@
     "engine:offline": "node --no-warnings --import tsx src/server/main.ts --no-llm",
     "dashboard:install": "npm --prefix apps/dashboard install",
     "dashboard:build": "npm --prefix apps/dashboard run build",
-    "dashboard": "npm --prefix apps/dashboard run start"
+    "dashboard": "npm --prefix apps/dashboard run start",
+    "smoke:airwallex": "node --no-warnings --env-file-if-exists=.env --import tsx scripts/airwallex-smoke.ts"
   },
   "engines": {
     "node": ">=22.13"
