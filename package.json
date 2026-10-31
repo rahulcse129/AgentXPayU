@@ -5,6 +5,7 @@
   "description": "Inference sourcing agent that buys AI work by live price and never charges past the customer's hold.",
   "type": "module",
   "scripts": {
+    "check": "npm run typecheck && npm test && npm run sim && npm run sim:sabotage",
     "test": "node --no-warnings --import tsx --test test/*.test.ts",
     "typecheck": "tsc --noEmit",
     "sim": "node --no-warnings --import tsx src/sim/run.ts",

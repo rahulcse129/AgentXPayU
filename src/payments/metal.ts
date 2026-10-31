@@ -11,6 +11,18 @@
  *    connections). The engine will retry with the same key, then call lookup().
  *  - lookup() must answer from chain or SDK state, not from memory alone.
  *  - Amounts arrive as integer micros of USDZ; convert to the token's decimals here only.
+ *
+ * What @metalntwx/metal-pay@0.3.4 actually offers (read from its README and .d.ts, 2026-11-01):
+ *  - x402 payer: `createMetalPaymentClient({ account, network: "testnet", maxAmount })` →
+ *    `fetchWithPayment`. It pays the provider's 402 (ERC-3009 TransferWithAuthorization in *USDZ)
+ *    and refuses offers above `maxAmount` (a bigint in USDZ base units) before signing.
+ *  - mandates (`@metalntwx/metal-pay/mandates`): `createCredential`, `bindCall`, `replaceCall`,
+ *    `revokeCall`, `authorizeMandateCall`, `sendMandateCall`, `createMandatePaymentClient`,
+ *    `readMandateState`, `readCheck`, `describeRefusal`. With a mandate the agent pays FROM the
+ *    owner's MetalAccount, so "deposit" here becomes funding that account + binding the mandate.
+ *  - facilitator (payee side): https://x402-testnet.metalntwx.com/x402/facilitator
+ *  - RPC: testnet needs your own endpoint from the console; pass it as METAL_RPC_URL.
+ * Not yet wired: needs a 0.3.3 account, a funded key and an RPC endpoint. See docs/STATUS.md.
  */
 import type { Micros } from "../money.ts";
 import type { FloatGateway } from "./types.ts";

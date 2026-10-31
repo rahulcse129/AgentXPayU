@@ -1,0 +1,56 @@
+# Margin: status
+
+Last updated: 2026-11-01. Submission deadline: 13 November 2026.
+
+## Live vs simulated, today
+
+| Rail / component | Mode `mock` (default) | Mode `live` | State |
+|---|---|---|---|
+| Card holds (Airwallex) | `MockAirwallex` | `AirwallexHoldGateway`, sandbox | **Not yet run against the sandbox.** Client written, `VERIFY` fields open. |
+| Provider payments (Metal x402) | `MockMetal` | `MetalFloatGateway`, testnet | **Not wired.** Stub with documented contract and SDK surface. |
+| Mandates (Metal) | — | planned, §5.3 | **Not started.** |
+| Clearing (Metal) | `ClearingEmulator` | none | **SIMULATED in every mode.** Not available to builders on testnet. |
+| LLM judge / explainer | `TagJudge` | planned, §5.5 | **Not started.** |
+| Dashboard | — | planned, §5.6 | **Not started.** |
+
+Nothing in this repo is LIVE yet. Every number on screen and in reports so far comes from the mocks or the emulator.
+
+## What is done
+
+- **Baseline kept green.** `npm run check` = typecheck + unit tests + 10,000-run sim + sabotage.
+- **Pinned packages.** `@metalntwx/metal-agent@0.3.3` (`npx metal-agent --version` prints `0.3.3`) and `@metalntwx/metal-pay@0.3.4`, both exact, plus `viem`.
+- **Unit tests (`test/`, 81 tests).** Every exported policy function with boundaries (exact headroom, one micro short, zero float, all providers slow, price tie broken by latency), `verifyQuote` (overquote by one micro, underquote allowed, wrong payee, wrong asset, fractional/negative), ledger idempotency conflicts, hold lifecycle, `SqliteStore` ↔ `MemoryStore` parity, and the database-level `captured <= authorized` check.
+- **Adapter contract tests.** The same suites run against `MockMetal`/`MetalFloatGateway` and `MockAirwallex`/`AirwallexHoldGateway`. The live runs are skipped unless `METAL_PRIVATE_KEY`+`METAL_RPC_URL` or `AIRWALLEX_CLIENT_ID`+`AIRWALLEX_API_KEY`+`AIRWALLEX_TEST_PAYMENT_METHOD` are set.
+- **Clearing (§5.4) behind `ClearingPort`, emulated.** See below.
+- **Fix:** `npm run providers` never started on Windows, because the entry-point check compared a `file://` URL to a Windows path. It now uses `pathToFileURL`.
+
+## Clearing: why it is emulated
+
+From the hackathon track channel: Metal clearing (per-job deposit, signed running totals, epochs, withdrawal after epoch close) **is not available on testnet for builders**. `metal-agent` 0.3.3 has no clearing commands. Another Kit 12 team has asked Metal whether an emulator is acceptable, and that question is still open.
+
+What the installed SDK shows (read 2026-11-01): `metal-pay@0.3.4` *does* ship a clearing client: `createClearingClient`, `depositToClearing`, `clearingSpendable`, `clearingBalance`, `withdrawFromClearing`, `ClearingRefusal` (`between_epochs`, `insufficient_deposit`, `answer_lost`, `payment_held`), and `openClearingWallet` from `/node`. It signs cumulative payments with **P-256**, needs a Clearing deployment that the facilitator lists in `/supported`, and calls the offer scheme `bajillion`. So a live adapter has a concrete target once Metal opens a testnet deployment to builders.
+
+How we built it:
+
+- `src/clearing/port.ts`: `ClearingPort` with `openDeposit`, `signRunningTotal`, `closeEpoch`, `settle`, `withdraw`, plus `raiseDeposit` (a hold increase must raise the deposit too; Metal's `depositToClearing` can fund an account again) and `status`.
+- `src/clearing/emulator.ts`: `ClearingEmulator` enforces Kit 12's rules. It allows one deposit per job, running totals never go down, a job's totals never exceed its deposit, payees redeem only above what they already redeemed, a signature must verify before redemption, and the unused deposit can be withdrawn only after every epoch the job signed in has settled. Any attempt to break a rule is refused and recorded.
+- Signatures: EIP-712 typed data via viem (`Eip712Signer`, domain chain id 63825 = Metal testnet). Real Metal clearing uses P-256, so these signatures only show the protocol shape and are not interchangeable with Metal's.
+- Engine: the deposit mirrors the card hold. It is raised **after** Airwallex's increment succeeds, and the ledger's hold is raised last. Every paid x402 payment is also signed as the job's cumulative total to that payee. Epochs settle every N rounds. **Finality gate:** a hold is captured or cancelled only after that job's clearing is closed, settled and withdrawn; otherwise the capture is deferred and logged.
+- Labelling: every clearing ledger event carries `source: "simulated"`, the demo prints `[SIMULATED]`, and `sim-report.json` has a separate `clearing` block with `source: "simulated"`.
+- Config: `CLEARING_MODE=emulator` (default) | `off` | `live`. `live` refuses to start with an explanation rather than silently falling back.
+- Sim: 5 new invariant families (no rule broken; no total redeemed twice; redeemed = ledger paid per job; deposit − redeemed = withdrawn; captured only after final). Every 500th seed (20 runs) uses real EIP-712. The rest use a keyed-hash signer with the same accept/reject behaviour, because EIP-712 recovery costs about 14 ms per check (benchmarked) and the full sweep checks 144k totals.
+
+Result of `npm run sim` (10,000 runs): **0 violations**. 143,996 running totals signed, matching the 143,996 provider payments one for one; 123,312 redemptions over 41,499 epochs. All pre-existing statistics are unchanged from the baseline, so the engine's money behaviour did not change. `npm run sim:sabotage`: all **5** broken engines caught, including the new `finality` sabotage (captures before epoch close), caught in 1,987 of 2,000 runs.
+
+## What blocks live mode (needs the team)
+
+1. **Airwallex sandbox keys** (`AIRWALLEX_CLIENT_ID`, `AIRWALLEX_API_KEY`) to resolve the `VERIFY` comments in `src/payments/airwallex.ts`: is `increment_authorization.amount` the new total or the delta, which card brands support it, the minimum capture amount, and the cancel body field names. Then run `scripts/airwallex-smoke.ts` (not written yet).
+2. **Metal testnet:** an account created on 0.3.3 (`metal-agent account create`), a funded key, and an RPC endpoint from the console. The console's billing page has hung for other teams, so use any working endpoint via `METAL_RPC_URL`.
+3. **Design decision for mandates (§5.3):** with a mandate, the agent pays *from the owner's MetalAccount* (`createMandatePaymentClient`), not from a float wallet it holds. So `FloatGateway.deposit` becomes "fund the owner account and bind the mandate", and `withdraw` becomes "revoke and leave the rest in the owner account". Rahul should confirm this before `MetalFloatGateway` is written.
+4. The mock provider server still trusts `X-PAYMENT`. Real verification goes through Metal's facilitator: `https://x402-testnet.metalntwx.com/x402/facilitator` with `registerMetalScheme` on an `x402ResourceServer`. That needs `@x402/core` and a middleware package (`@x402/hono` or `@x402/express`), which are not installed yet.
+
+## Known limitations
+
+- One clearing deposit per job is sized to the hold, not to the job's share of the float. In the emulator that is harmless. With live clearing, it would lock the full hold per job until the epoch closes.
+- Epochs advance by engine rounds, not wall-clock time.
+- A hold whose capture was deferred by the finality gate is meant to be retried by a startup sweeper, which is not written yet (§5.7, days 7–8).

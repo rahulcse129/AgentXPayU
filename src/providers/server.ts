@@ -14,6 +14,7 @@
  * Run: npm run providers   (PORT=4021 by default)
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { pathToFileURL } from "node:url";
 import { CATALOG, providerById } from "../policy/catalog.ts";
 import type { Step } from "../policy/types.ts";
 import { HONEST, makeOutput, makeQuote, ProviderDeliveryError, type ProviderControl, type ProviderMode } from "./logic.ts";
@@ -71,7 +72,7 @@ export function createProviderServer() {
   });
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const port = Number(process.env.PORT ?? 4021);
   createProviderServer().listen(port, () => console.log(`mock providers on http://localhost:${port}`));
 }
