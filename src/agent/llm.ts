@@ -1,11 +1,12 @@
 /**
- * The one place Margin talks to an LLM. Two calls only: a JSON answer against a schema
- * (scoring) and a short text (explanations and report paragraphs).
+ * The LLM seam. Two calls only: a JSON answer against a schema (scoring) and a short text
+ * (explanations and report paragraphs). Implemented by AnthropicLlm (below) and GeminiLlm
+ * (gemini.ts); `llmFromEnv()` picks one.
  *
  * The LLM never sees prices, budgets, holds, caps or provider choice, and nothing it returns
  * reaches the policy module except a 0..1 quality score, which the judge clamps.
  *
- * Notes on the current Claude API (claude-opus-5-5), since the project prompt predates them:
+ * Notes on the Claude API (claude-opus-5-5), since the project prompt predates them:
  *  - `temperature` is rejected (400). We use `output_config.effort: "low"` for short,
  *    consistent answers instead.
  *  - Forced `tool_choice` is rejected (400). The judge's "one typed call" is structured

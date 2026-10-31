@@ -10,7 +10,7 @@ Last updated: 2026-11-01. Submission deadline: 13 November 2026.
 | Provider payments (Metal x402) | `MockMetal` | `MetalFloatGateway`, testnet | **Not wired.** Stub with documented contract and SDK surface. |
 | Mandates (Metal) | — | planned, §5.3 | **Not started.** |
 | Clearing (Metal) | `ClearingEmulator` | none | **SIMULATED in every mode.** Not available to builders on testnet. |
-| LLM judge / explainer / report text | `TagJudge`, template lines | `LlmJudge`, `Explainer`, `ReportWritingProviders` on `claude-opus-5-5` | **Built and tested with a fake LLM. Not yet run against the real API** (needs `LLM_API_KEY`). |
+| LLM judge / explainer / report text | `TagJudge`, template lines | `LlmJudge`, `Explainer`, `ReportWritingProviders` on Gemini (`gemini-3.8-flash`) or Claude (`claude-opus-5-5`) | **Built and tested with fake LLMs.** A bad Gemini key fails in ~1 s and falls back cleanly. **Not yet run with a real key.** |
 | Dashboard | — | planned, §5.6 | **Not started.** |
 
 Nothing in this repo is LIVE yet. Every number on screen and in reports so far comes from the mocks or the emulator.
@@ -19,14 +19,29 @@ Nothing in this repo is LIVE yet. Every number on screen and in reports so far c
 
 - **Baseline kept green.** `npm run check` = typecheck + unit tests + 10,000-run sim + sabotage.
 - **Pinned packages.** `@metalntwx/metal-agent@0.3.3` (`npx metal-agent --version` prints `0.3.3`) and `@metalntwx/metal-pay@0.3.4`, both exact, plus `viem`.
-- **Unit tests (`test/`, 98 tests).** Every exported policy function with boundaries (exact headroom, one micro short, zero float, all providers slow, price tie broken by latency), `verifyQuote` (overquote by one micro, underquote allowed, wrong payee, wrong asset, fractional/negative), ledger idempotency conflicts, hold lifecycle, `SqliteStore` ↔ `MemoryStore` parity, and the database-level `captured <= authorized` check.
+- **Unit tests (`test/`, 105 tests).** Every exported policy function with boundaries (exact headroom, one micro short, zero float, all providers slow, price tie broken by latency), `verifyQuote` (overquote by one micro, underquote allowed, wrong payee, wrong asset, fractional/negative), ledger idempotency conflicts, hold lifecycle, `SqliteStore` ↔ `MemoryStore` parity, and the database-level `captured <= authorized` check.
 - **Adapter contract tests.** The same suites run against `MockMetal`/`MetalFloatGateway` and `MockAirwallex`/`AirwallexHoldGateway`. The live runs are skipped unless `METAL_PRIVATE_KEY`+`METAL_RPC_URL` or `AIRWALLEX_CLIENT_ID`+`AIRWALLEX_API_KEY`+`AIRWALLEX_TEST_PAYMENT_METHOD` are set.
 - **Clearing (§5.4) behind `ClearingPort`, emulated.** See below.
 - **Fix:** `npm run providers` never started on Windows, because the entry-point check compared a `file://` URL to a Windows path. It now uses `pathToFileURL`.
 
 ## Agent intelligence (§5.5)
 
-Code in `src/agent/`. Turned on in the demo by `LLM_API_KEY` (or `ANTHROPIC_API_KEY` / an `ant auth login` profile). Without one, `npm run demo` stays offline and deterministic.
+Code in `src/agent/`. Turned on in the demo by a key in the environment or in `.env`, which `npm run demo` reads itself. Without one, `npm run demo` stays offline and deterministic.
+
+**Two providers behind one `LlmClient` seam**, chosen by `llm-config.ts`:
+
+| Key set | Provider | Default model | Client |
+|---|---|---|---|
+| `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) | Gemini, preferred when set | `gemini-3.8-flash` | `GeminiLlm`, `@google/genai@2.32.0` Interactions API |
+| `LLM_API_KEY` / `ANTHROPIC_API_KEY` | Claude | `claude-opus-5-5` | `AnthropicLlm`, `@anthropic-ai/sdk` |
+
+`LLM_PROVIDER=gemini|anthropic` forces one, and `LLM_MODEL` overrides the model. Gemini notes, from Google's docs and the SDK types (2026-11-01):
+- Google's docs now use the Interactions API (`client.interactions.create`) in every example, so that is what we call.
+- Structured output is `response_format: { type: "text", mime_type: "application/json", schema }`.
+- `temperature` is deprecated and ignored on Gemini 3.6+, so steadiness comes from `thinking_level: "low"`.
+- Thinking tokens count toward `max_output_tokens`, so budgets are at least 2048.
+- Every request sends `store: false`, so Google keeps no prompts or provider outputs.
+- Any status other than `completed`, or an empty answer, is an error, and the caller falls back without the LLM.
 
 - **`LlmJudge`** returns `{ score, reason }` for an answer. Rubrics per step kind, cached by a SHA-256 of the output, scores clamped to 0..1. On any LLM failure (error, refusal, cut-off, malformed JSON) it returns the neutral score 0.7 and does not cache it. The provider's output is fenced as untrusted data. In the demo it grades model steps only, because search and data are still placeholders; those keep `TagJudge`.
 - **`Explainer`** gives one feed line per ledger event. The facts come from deterministic templates (`describe.ts`), and the policy's own `why` is kept verbatim beside the line. The LLM may only rephrase decision events. `faithful()` rejects any rephrasing that adds a number, amount or provider id not in the source, or runs to several lines. A rejected or failed rephrasing falls back to the template.
@@ -35,7 +50,7 @@ Code in `src/agent/`. Turned on in the demo by `LLM_API_KEY` (or `ANTHROPIC_API_
 - **Proof the LLM cannot move money:** `test/agent.test.ts` runs 300 sim scenarios with hostile judges (always 0, always 1, random, out of range, unavailable, garbage) and requires zero invariant violations. Neither the judge prompt nor the writer prompt contains prices, budgets, holds or addresses; tests check this.
 - **Bug found by that test, and fixed:** with every answer judged junk, the engine looped until its 500-round guard tripped. `degradePlan` priced a step at a provider that had already failed that step, so the "fitting" plan could never be bought. The fix: `estimateRemaining` and `degradePlan` take per-step exclusions, and a no-progress round that leaves a plan unchanged drops the stuck step. Money was always settled correctly by the `finally` block. The same fix removed 14 "did not converge" crashes from the idempotency sabotage run, which is still caught.
 
-Still open for §5.5: run `LLM_API_KEY=… npm run demo` once against the real API and read `demo-report.md` for coherence.
+Still open for §5.5: put a real key in `.env`, run `npm run demo` once, and read `demo-report.md` for coherence.
 
 ## Clearing: why it is emulated
 

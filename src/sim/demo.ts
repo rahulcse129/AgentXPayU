@@ -4,7 +4,7 @@
  * Midway: job B's prompt runs 4x over and the 1¢ model slows down. The rogue provider overquotes.
  *
  *   npm run demo        offline and deterministic (TagJudge, template feed lines)
- *   LLM_API_KEY=… npm run demo
+ *   GEMINI_API_KEY=… npm run demo   (or LLM_API_KEY for Claude; .env is read automatically)
  *                       adds the LLM: a judge that grades model answers, an explainer that phrases
  *                       each decision, and real report text behind the mock-priced providers.
  *                       Also writes demo-report.md.
@@ -23,7 +23,7 @@ import { Orchestrator, type JobSpec } from "../engine/orchestrator.ts";
 import { ScriptedCustomers, TagJudge, type ProviderPort, type QualityJudge } from "../engine/ports.ts";
 import { ClearingEmulator } from "../clearing/emulator.ts";
 import { EMULATOR_TEST_KEY, Eip712Signer } from "../clearing/signer.ts";
-import { AnthropicLlm } from "../agent/llm.ts";
+import { llmFromEnv, llmProviderFromEnv } from "../agent/llm-config.ts";
 import { LlmJudge } from "../agent/judge.ts";
 import { Explainer, type Explanation } from "../agent/explainer.ts";
 import { ReportWritingProviders } from "../agent/report-providers.ts";
@@ -48,8 +48,6 @@ export const DEMO_TOPICS = new Map([
   ["C", "Choosing between open-weight and hosted language models for a startup"],
 ]);
 
-const useLlm = Boolean(process.env.LLM_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
-
 async function main() {
   const rng = seeded(42);
   let clock = 0;
@@ -61,13 +59,17 @@ async function main() {
   mockProviders.control(ROGUE_PROVIDER_ID, { mode: "overquote", overquoteFactor: 3 });
   const customers = new ScriptedCustomers((req) => (req.jobId === "B" ? "approved" : "declined"));
 
-  const llm = useLlm ? AnthropicLlm.fromEnv() : undefined;
+  const llm = llmFromEnv();
   const writer = llm ? new ReportWritingProviders(mockProviders, llm, DEMO_TOPICS, (id) => mockProviders.get(id).mode) : undefined;
   const providers: ProviderPort = writer ?? mockProviders;
   // Search and data are still placeholders, so the LLM grades model answers only.
   const judge: QualityJudge = llm ? new LlmJudge(llm, { kinds: ["model"], other: new TagJudge() }) : new TagJudge();
   const explainer = new Explainer(llm);
-  console.log(llm ? `LLM: ${llm.model} (judge, explainer, report text)\n` : "LLM: off (set LLM_API_KEY for the judge, explainer and report text)\n");
+  console.log(
+    llm
+      ? `LLM: ${llmProviderFromEnv()} ${llm.model} (judge, explainer, report text)\n`
+      : "LLM: off (set GEMINI_API_KEY or LLM_API_KEY, e.g. in .env, for the judge, explainer and report text)\n",
+  );
 
   const recorder = new RecordingProviders(providers);
   const clearing = new ClearingEmulator(new Eip712Signer(EMULATOR_TEST_KEY));

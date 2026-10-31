@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit",
     "sim": "node --no-warnings --import tsx src/sim/run.ts",
     "sim:sabotage": "node --no-warnings --import tsx src/sim/run.ts --runs=2000 --sabotage=all",
-    "demo": "node --no-warnings --import tsx src/sim/demo.ts",
+    "demo": "node --no-warnings --env-file-if-exists=.env --import tsx src/sim/demo.ts",
     "providers": "node --no-warnings --import tsx src/providers/server.ts"
   },
   "engines": {
@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "1.3.0",
+    "@google/genai": "2.32.0",
     "@metalntwx/metal-agent": "0.3.3",
     "@metalntwx/metal-pay": "0.3.4",
     "viem": "2.57.13"
