@@ -19,5 +19,10 @@
     "@types/node": "^22.10.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
+  },
+  "dependencies": {
+    "@metalntwx/metal-agent": "0.3.3",
+    "@metalntwx/metal-pay": "0.3.4",
+    "viem": "2.57.13"
   }
 }
