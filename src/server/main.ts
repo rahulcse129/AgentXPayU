@@ -18,6 +18,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { llmFromEnv, llmProviderFromEnv } from "../agent/llm-config.ts";
 import { MetalFloatGateway } from "../payments/metal.ts";
+import { MockAirwallex } from "../payments/mock-airwallex.ts";
+import { SqliteStore } from "../ledger/sqlite.ts";
+import { sweepOrphanedHolds } from "../ledger/sweeper.ts";
 import { DemoSession, type ControlAction, type LiveMetal, type SessionMessage } from "./session.ts";
 
 export interface RailStatus {
@@ -153,6 +156,23 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const port = Number(process.env.PORT ?? 4100);
   const liveMetal = process.argv.includes("--live-metal");
   const { server } = createEngineServer(process.env, { noLlm: process.argv.includes("--no-llm"), liveMetal });
+
+  // --- Startup sweeper: close any holds left open by a prior crash ---
+  if (process.env.LEDGER_PATH) {
+    try {
+      const store = new SqliteStore(process.env.LEDGER_PATH);
+      const holds = new MockAirwallex(); // swap for AirwallexHoldGateway.fromEnv() in live mode
+      const result = await sweepOrphanedHolds(store, holds);
+      if (result.swept > 0) {
+        console.log(`[Sweeper] Resolved ${result.swept} orphaned hold(s): ${result.captured} captured, ${result.cancelled} cancelled, ${result.errors.length} errors`);
+      }
+      store.close?.();
+    } catch (e) {
+      console.error(`[Sweeper] Failed to run startup sweep: ${String(e)}`);
+    }
+  }
+  // ---------------------------------------------------------------
+
   server.listen(port, () =>
     console.log(`margin engine on http://localhost:${port} · Metal rail: ${liveMetal ? "LIVE (testnet)" : "SIMULATED"}  (dashboard: npm run dashboard)`),
   );

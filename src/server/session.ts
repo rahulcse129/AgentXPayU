@@ -23,6 +23,8 @@ import { MockMetal } from "../payments/mock-metal.ts";
 import type { FloatGateway } from "../payments/types.ts";
 import type { MetalFloatGateway } from "../payments/metal.ts";
 import { auditPaymentsOnChain, METAL_EXPLORER_TX } from "../payments/metal-audit.ts";
+import { MockMandateGateway } from "../payments/mandate.ts";
+import { MandateManager } from "../payments/mandate-manager.ts";
 import { InProcessProviders } from "../providers/in-process.ts";
 import { HttpProviders } from "../providers/http-client.ts";
 import { createProviderServer } from "../providers/server.ts";
@@ -168,6 +170,7 @@ export class DemoSession {
   private providers: ProviderBackend | null = null;
   private ledger: Ledger | null = null;
   private pendingOverrun = false;
+  private mandateManager: MandateManager | null = null;
 
   constructor(
     private readonly opts: { llm?: GuardedLlm; paceScale?: number; approvalTimeoutMs?: number; live?: LiveMetal } = {},

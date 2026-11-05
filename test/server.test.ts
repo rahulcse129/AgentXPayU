@@ -61,9 +61,12 @@ test("a scripted dashboard run hits every beat and reconciles four ways", { time
       // Beat 4: B's customer approves. Beat 5: a second customer declines.
       if (m.kind === "approval.requested") await post(m.jobId === "B" ? "/api/approve" : "/api/decline", { jobId: m.jobId });
     });
-    const started = await post("/api/run", { scripted: true });
+    const [started, duplicate] = await Promise.all([
+      post("/api/run", { scripted: true }),
+      post("/api/run", { scripted: true }),
+    ]);
     assert.equal(started.status, 202);
-    assert.equal((await post("/api/run", { scripted: true })).status, 409, "one run at a time");
+    assert.equal(duplicate.status, 409, "one run at a time");
 
     const seen = await done;
     const events = seen.flatMap((m) => (m.kind === "event" ? [m.event] : []));
