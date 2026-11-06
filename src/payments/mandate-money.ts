@@ -1,23 +1,14 @@
 /**
- * Micro-to-major-unit conversion for the metal-agent CLI.
- * metal-agent mandate commands take amounts in USDZ major units (dollars), e.g. "0.05".
- * Our ledger uses micros (integer micro-dollars).
- *
- * 1 USDZ = 1,000,000 micros.  1 micro = 0.000001 USDZ.
- * We format with exactly 6 decimal places and trim trailing zeros but keep at least 2.
- *
- * Examples:
- *   5000  → "0.005000" → "0.005"   (5 milli-dollars = $0.005)
- *   100   → "0.0001"               (100 micros = $0.0001)
- *   1000000 → "1.00"               (1 dollar)
+ * Micros to the decimal *USDZ strings the metal-agent CLI takes. Mandate amounts are "to the
+ * cent" (CLI help), so anything finer is refused rather than rounded: money is never rounded
+ * in either party's favour.
  */
-import type { Micros } from "../money.ts";
+import { MICROS_PER_CENT, type Micros } from "../money.ts";
+import { PaymentRefused } from "./types.ts";
 
-export function toMajorString(micros: Micros): string {
-  if (!Number.isInteger(micros) || micros < 0) throw new Error(`invalid micros: ${micros}`);
-  const whole = Math.floor(micros / 1_000_000);
-  const frac = micros % 1_000_000;
-  const fracStr = frac.toString().padStart(6, "0").replace(/0+$/, "").padEnd(2, "0");
-  return `${whole}.${fracStr}`;
+export function toUsdzCents(micros: Micros): string {
+  if (!Number.isSafeInteger(micros) || micros < 0) throw new Error(`invalid micros: ${micros}`);
+  if (micros % MICROS_PER_CENT !== 0) throw new PaymentRefused(`amount ${micros} micros is not a whole number of cents; mandates pay to the cent`);
+  const c = micros / MICROS_PER_CENT;
+  return `${Math.floor(c / 100)}.${String(c % 100).padStart(2, "0")}`;
 }
-

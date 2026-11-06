@@ -12,16 +12,17 @@
  * npm run engine:offline (or DASHBOARD_LLM=off) keeps it off: each run costs ~17 LLM calls.
  * npm run engine:live (--live-metal) pays providers with real x402 on Metal testnet, about
  * 1.4 USDZ per scripted run; needs METAL_PRIVATE_KEY and METAL_RPC_URL.
+ * npm run engine:live-mandate (--live-mandate) pays through a real Metal mandate on the owner's
+ * account; needs METAL_OWNER_ACCOUNT, METAL_OWNER_KEY_FILE and METAL_RPC_URL.
+ * Offline, every run still pays through a SIMULATED mandate, so both locks are always on.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { existsSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { llmFromEnv, llmProviderFromEnv } from "../agent/llm-config.ts";
 import { MetalFloatGateway } from "../payments/metal.ts";
-import { MockAirwallex } from "../payments/mock-airwallex.ts";
-import { SqliteStore } from "../ledger/sqlite.ts";
-import { sweepOrphanedHolds } from "../ledger/sweeper.ts";
-import { DemoSession, type ControlAction, type LiveMetal, type SessionMessage } from "./session.ts";
+import { MetalMandateGateway } from "../payments/mandate.ts";
+import { DemoSession, type ControlAction, type LiveMandate, type LiveMetal, type SessionMessage } from "./session.ts";
 
 export interface RailStatus {
   rail: string;
@@ -70,9 +71,14 @@ function send(res: ServerResponse, status: number, data: unknown) {
   res.end(JSON.stringify(data));
 }
 
-export function createEngineServer(env: NodeJS.ProcessEnv = process.env, opts: { noLlm?: boolean; liveMetal?: boolean } = {}) {
+export function createEngineServer(
+  env: NodeJS.ProcessEnv = process.env,
+  opts: { noLlm?: boolean; liveMetal?: boolean; liveMandate?: boolean } = {},
+) {
   const llm = opts.noLlm || env.DASHBOARD_LLM === "off" ? undefined : llmFromEnv(env);
+  if (opts.liveMetal && opts.liveMandate) throw new Error("choose one: --live-metal (agent wallet) or --live-mandate (owner account)");
   let live: LiveMetal | undefined;
+  let liveMandate: LiveMandate | undefined;
   let payer = "";
   if (opts.liveMetal) {
     const rpcUrl = env.METAL_RPC_URL?.trim();
@@ -80,23 +86,36 @@ export function createEngineServer(env: NodeJS.ProcessEnv = process.env, opts: {
     payer = MetalFloatGateway.fromEnv(env).address;
     live = { rpcUrl, makeFloat: () => MetalFloatGateway.fromEnv(env) };
   }
+  if (opts.liveMandate) {
+    const gw = MetalMandateGateway.fromEnv(env);
+    payer = gw.payer;
+    liveMandate = { rpcUrl: env.METAL_RPC_URL!.trim(), makeGateway: () => MetalMandateGateway.fromEnv(env) };
+  }
   const session = new DemoSession({
     llm,
     live,
+    liveMandate,
     paceScale: env.PACE_SCALE ? Number(env.PACE_SCALE) : 0.6,
     approvalTimeoutMs: env.APPROVAL_TIMEOUT_MS ? Number(env.APPROVAL_TIMEOUT_MS) : 30_000,
   });
 
   const meta = (): Meta => {
     const sim = readJson<{ badge: string; runs: number; passed: boolean; generatedAt: string; clearing?: { badge?: string } }>("sim-report.json");
+    const anyLive = Boolean(live || liveMandate);
     return {
-      mode: live ? "mixed" : "mock",
+      mode: anyLive ? "mixed" : "mock",
       rails: [
         { rail: "Airwallex holds", source: "simulated", detail: "MockAirwallex: enforces capture ≤ hold. The team's sandbox has Payments disabled for its region." },
         live
           ? { rail: "Metal x402 payments", source: "live", detail: `Metal testnet (eip155:63825) via Metal's x402 facilitator; agent ${payer}; providers verify each payment on chain` }
-          : { rail: "Metal x402 payments", source: "simulated", detail: "MockMetal: idempotent settlement. Run npm run engine:live for real testnet payments." },
-        { rail: "Metal mandates", source: "not built", detail: "§5.3: on-chain second lock, not built yet" },
+          : liveMandate
+            ? { rail: "Metal payments", source: "live", detail: `Metal testnet: mandate pulls from the owner's account ${payer}; providers verify each payment on chain` }
+            : { rail: "Metal x402 payments", source: "simulated", detail: "MockMetal: idempotent settlement. Run npm run engine:live for real testnet payments." },
+        liveMandate
+          ? { rail: "Metal mandates", source: "live", detail: `On chain on ${payer}: payee allowlist, per-payment cap and budget checked by the account before every payment` }
+          : live
+            ? { rail: "Metal mandates", source: "off", detail: "This mode pays x402 straight from the agent wallet. Use engine:live-mandate for the on-chain second lock." }
+            : { rail: "Metal mandates", source: "simulated", detail: "MockMandateGateway: the same payee allowlist, cap and budget rules, in memory, in front of every payment" },
         { rail: "Metal clearing", source: "simulated", detail: "ClearingEmulator: not available to builders on testnet" },
         llm
           ? { rail: "LLM (judge, feed, report)", source: "live", detail: `${llmProviderFromEnv(env)} ${llm.model}; never sees prices or holds` }
@@ -142,7 +161,7 @@ export function createEngineServer(env: NodeJS.ProcessEnv = process.env, opts: {
         const action = String((await body(req)).action ?? "") as ControlAction;
         if (!CONTROLS.includes(action)) return send(res, 400, { ok: false, message: `unknown action ${action}` });
         const r = await session.control(action);
-        return send(res, r.ok ? 200 : action === "mandate_test" ? 501 : 409, r);
+        return send(res, r.ok ? 200 : 409, r);
       }
       send(res, 404, { error: "not found" });
     } catch (e) {
@@ -155,25 +174,14 @@ export function createEngineServer(env: NodeJS.ProcessEnv = process.env, opts: {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const port = Number(process.env.PORT ?? 4100);
   const liveMetal = process.argv.includes("--live-metal");
-  const { server } = createEngineServer(process.env, { noLlm: process.argv.includes("--no-llm"), liveMetal });
+  const liveMandate = process.argv.includes("--live-mandate");
+  const { server } = createEngineServer(process.env, { noLlm: process.argv.includes("--no-llm"), liveMetal, liveMandate });
 
-  // --- Startup sweeper: close any holds left open by a prior crash ---
-  if (process.env.LEDGER_PATH) {
-    try {
-      const store = new SqliteStore(process.env.LEDGER_PATH);
-      const holds = new MockAirwallex(); // swap for AirwallexHoldGateway.fromEnv() in live mode
-      const result = await sweepOrphanedHolds(store, holds);
-      if (result.swept > 0) {
-        console.log(`[Sweeper] Resolved ${result.swept} orphaned hold(s): ${result.captured} captured, ${result.cancelled} cancelled, ${result.errors.length} errors`);
-      }
-      store.close?.();
-    } catch (e) {
-      console.error(`[Sweeper] Failed to run startup sweep: ${String(e)}`);
-    }
-  }
-  // ---------------------------------------------------------------
+  // Startup sweeper (src/ledger/sweeper.ts) needs holds that outlive this process. Dashboard card
+  // holds are MockAirwallex, in memory: after a crash there is nothing left to capture or cancel,
+  // so sweeping them would be pretend. It runs where holds are real (AirwallexHoldGateway).
+  console.log("[sweeper] idle: card holds are simulated in memory and do not survive a restart (runs with real Airwallex holds)");
 
-  server.listen(port, () =>
-    console.log(`margin engine on http://localhost:${port} · Metal rail: ${liveMetal ? "LIVE (testnet)" : "SIMULATED"}  (dashboard: npm run dashboard)`),
-  );
+  const rail = liveMandate ? "LIVE through a Metal mandate" : liveMetal ? "LIVE x402 (testnet)" : "SIMULATED (simulated mandate in front)";
+  server.listen(port, () => console.log(`margin engine on http://localhost:${port} · Metal rail: ${rail}  (dashboard: npm run dashboard)`));
 }

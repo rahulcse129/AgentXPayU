@@ -39,8 +39,13 @@ export function Controls({
             {b.label}
           </button>
         ))}
-        <button className="btn small-btn" onClick={() => onControl("mandate_test")} title="Needs Metal mandates (§5.3), not built yet">
-          Disable our quote check (mandate test) · not built
+        <button
+          className="btn small-btn bad"
+          disabled={!running}
+          onClick={() => onControl("mandate_test")}
+          title="Deliberate test: turns OUR quote check off and sends the rogue to an unregistered address. Only the Metal mandate is left to refuse it; our check comes back on after the refusal."
+        >
+          Disable our quote check (mandate test)
         </button>
       </div>
       {toast && (

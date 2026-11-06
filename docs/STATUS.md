@@ -8,7 +8,7 @@ Last updated: 2026-11-01. Submission deadline: 13 November 2026.
 |---|---|---|---|
 | Card holds (Airwallex) | `MockAirwallex` | `AirwallexHoldGateway`, sandbox | **Blocked:** the team's sandbox has Payments disabled for its region (below). Client and smoke test ready. |
 | Provider payments (Metal x402) | `MockMetal` | `MetalFloatGateway`, testnet | **LIVE on testnet** (2026-11-01). The engine pays through Metal's x402 facilitator, and providers verify each payment on chain. `npm run live:x402`; passes the adapter contract tests live. **On the dashboard via `npm run engine:live`.** The terminal demo still uses `MockMetal`. |
-| Mandates (Metal) | — | planned, §5.3 | **Not started.** |
+| Mandates (Metal) | `MockMandateGateway`: same rules in memory, in front of every payment | `MetalMandateGateway`: real `metal-agent` mandate commands, `engine:live-mandate` | **Built; SIMULATED end to end (tested).** Live code written against the real CLI; **not yet run on chain** (needs an owner MetalAccount). |
 | Clearing (Metal) | `ClearingEmulator` | none | **SIMULATED in every mode.** Not available to builders on testnet. |
 | LLM judge / explainer / report text | `TagJudge`, template lines | `LlmJudge`, `Explainer`, `ReportWritingProviders` on Gemini (`gemini-3.5-flash-lite`) or Claude (`claude-opus-5-5`) | **LIVE on Gemini** (2026-11-01 run below). Claude path tested with fakes only. |
 | Dashboard | Next.js 16 app + engine server, all rails mocked (`engine:offline`) | `engine:live`: Metal x402 LIVE, header MODE: MIXED, per-rail badges | **Built; live Metal rail verified in a browser** (2026-11-01, run below). |
@@ -54,13 +54,39 @@ LIVE today: provider payments on Metal testnet (`npm run live:x402`, and the das
   - The wallet went from 99.87 to **98.48 USDZ**, exactly the $1.39 spent.
   - A scripted dashboard run costs about 1.4 testnet USDZ; the faucet tops up.
 - Fixed during the run: the header briefly said "MODE: MOCK" before the engine's metadata arrived. It now shows "MODE: …" until the engine says which rails are live.
-- **Next:** mandates (§5.3).
+## Metal mandates (§5.3) and the startup sweeper
+
+First version by Kavisha (`dbe6432`, Nov 6): mandate interface, simulated gateway, lifecycle manager with ledger events, amount formatter, startup sweeper. Reviewed and reworked the same day. The original typechecked and passed tests, but the live gateway called commands `metal-agent` 0.3.3 doesn't have (`mandate create --payees`, `raise`, `--json`), the mandate wasn't connected to any run or payment, the 5¢ per-payment cap would have blocked almost every real step (24–30¢), and the sweeper read a ledger the engine never writes and closed holds on a fresh in-memory mock.
+
+**How mandates work now**
+- **Payments go through the mandate.** `MandateManager` *is* the engine's float. `deposit(float)` opens the mandate (credential + bind) with budget = the batch's float and a payee allowlist = the catalog's registered addresses. Every `pay()` is a pull under the mandate, which checks payee, per-payment cap and budget before anything moves. After an Airwallex increment succeeds, the engine's new `onHoldIncremented` hook raises the budget by the increment. When the batch ends, `close()` revokes it. Each step is in the ledger and the feed (`mandate.opened`, `raised`, `revoked`, `refused`).
+- **The cap is the largest single payment the policy can ever make:** one job's maximum hold ($3.00). The mandate's real teeth are the **payee allowlist** and the **total budget**; the cap is a backstop.
+- **A refusal is handled, not a crash.** `PaymentRefused` (in `payments/types.ts`) means nothing moved. The engine records the refusal on the receipt, blocks the provider and buys elsewhere; it doesn't retry. The x402 gateway's facilitator refusals use the same class.
+- **Live gateway** (`MetalMandateGateway`) runs the commands exactly as `metal-agent --help` documents them, through Node:
+  - `mandate credential create`, then `mandate bind`
+  - `mandate replace` with a wider credential under the same mandate key (spend carries over)
+  - `mandate revoke`
+  - `mandate pull --payment-id <idempotency key>`, which "pays at most once" per id. Exit codes: 0 paid, 1 refused/error, 3 pending (→ `TransientError`), 4 held.
+
+  Output is parsed from its `key value` lines; the format was confirmed from a real offline `credential create` with a throwaway key. Amounts are to the cent, and anything finer is refused, not rounded. Credentials and the mandate key live outside the repo (`METAL_MANDATE_DIR`, default `~/.metal-agent/margin-mandates`).
+- **Offline, every dashboard run pays through the simulated mandate**, labelled SIMULATED, so both locks are always on. `engine:live` (agent-wallet x402) runs without one, and its badge says so. `engine:live-mandate` uses the real one.
+- **The "Disable our quote check (mandate test)" button works.** It turns our own `verifyQuote` off (logged on every skipped check), points the rogue at an unregistered address and gives it another chance. The mandate refuses the payment. Our check switches back on by itself after the refusal, or at the end of the run. `test/server.test.ts` drives this end to end: the rogue's quote is skipped by us, refused by the mandate, blocked, no money reaches the bad address, and the run reconciles.
+
+**Sweeper** (`src/ledger/sweeper.ts`)
+- It finds holds still `authorized` in a persistent ledger.
+- It resolves each payment the crash left pending from the rail: settled → paid, not → failed.
+- If the rail can't answer, it leaves the hold open and reports it. It never captures a guess.
+- Then it captures what was spent (floored to the cent), or cancels, retrying transient errors. Events go through `Ledger`, the same as the engine's.
+- `test/sweeper.test.ts` simulates crashes with SQLite plus surviving holds and rail: capture/cancel, settled vs unsettled pending payments, unresolved-pending skip, idempotent re-sweep, transient vs permanent capture errors.
+- **Not wired into the dashboard on purpose:** its card holds are `MockAirwallex` in memory, so nothing survives a crash to sweep. The engine prints that at startup. It runs where holds are real Airwallex intents.
+
+**Still to do:** the live mandate on chain. It needs an owner MetalAccount (`metal-agent account create --out <owner key> --network testnet`, which creates a smart account on chain; the owner key pays the gas). Then set `METAL_OWNER_ACCOUNT` / `METAL_OWNER_KEY_FILE`, fund the account, and run `npm run engine:live-mandate`.
 
 ## What is done
 
 - **Baseline kept green.** `npm run check` = typecheck + unit tests + 10,000-run sim + sabotage.
 - **Pinned packages.** `@metalntwx/metal-agent@0.3.3` (`npx metal-agent --version` prints `0.3.3`) and `@metalntwx/metal-pay@0.3.4`, both exact, plus `viem`.
-- **Unit tests (`test/`, 125 tests).** Every exported policy function with boundaries (exact headroom, one micro short, zero float, all providers slow, price tie broken by latency), `verifyQuote` (overquote by one micro, underquote allowed, wrong payee, wrong asset, fractional/negative), ledger idempotency conflicts, hold lifecycle, `SqliteStore` ↔ `MemoryStore` parity, and the database-level `captured <= authorized` check.
+- **Unit tests (`test/`, 145 tests).** Every exported policy function with boundaries (exact headroom, one micro short, zero float, all providers slow, price tie broken by latency), `verifyQuote` (overquote by one micro, underquote allowed, wrong payee, wrong asset, fractional/negative), ledger idempotency conflicts, hold lifecycle, `SqliteStore` ↔ `MemoryStore` parity, and the database-level `captured <= authorized` check.
 - **Adapter contract tests.** The same suites run against `MockMetal`/`MetalFloatGateway` and `MockAirwallex`/`AirwallexHoldGateway`. The live runs are skipped unless `METAL_PRIVATE_KEY`+`METAL_RPC_URL` or `AIRWALLEX_CLIENT_ID`+`AIRWALLEX_API_KEY`+`AIRWALLEX_TEST_PAYMENT_METHOD` are set.
 - **Clearing (§5.4) behind `ClearingPort`, emulated.** See below.
 - **Fix:** `npm run providers` never started on Windows, because the entry-point check compared a `file://` URL to a Windows path. It now uses `pathToFileURL`.
@@ -161,4 +187,4 @@ Result of `npm run sim` (10,000 runs): **0 violations**. 143,996 running totals 
 
 - One clearing deposit per job is sized to the hold, not to the job's share of the float. In the emulator that is harmless. With live clearing, it would lock the full hold per job until the epoch closes.
 - Epochs advance by engine rounds, not wall-clock time.
-- A hold whose capture was deferred by the finality gate is meant to be retried by a startup sweeper, which is not written yet (§5.7, days 7–8).
+- A hold whose capture was deferred by the finality gate is left for the startup sweeper (`src/ledger/sweeper.ts`). That only applies where holds outlive the process (real Airwallex); dashboard holds are in-memory mocks.

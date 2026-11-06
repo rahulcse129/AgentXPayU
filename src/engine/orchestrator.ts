@@ -29,7 +29,7 @@ import {
   verifyQuote,
 } from "../policy/policy.ts";
 import type { JobBudget, PolicyConfig, ProviderHealth, ProviderSpec, Step } from "../policy/types.ts";
-import { InsufficientFloat, TransientError, type FloatGateway, type HoldGateway } from "../payments/types.ts";
+import { InsufficientFloat, PaymentRefused, TransientError, type FloatGateway, type HoldGateway } from "../payments/types.ts";
 import type { ClearingPort } from "../clearing/port.ts";
 import type { CustomerPort, ProviderPort, QualityJudge } from "./ports.ts";
 
@@ -89,6 +89,13 @@ export interface EngineDeps {
   /** Seeded in the simulation so every run is reproducible. */
   rng: () => number;
   sabotage?: Sabotage;
+  /**
+   * Demo-only switch for the dashboard's "mandate test": skip our own verifyQuote so a Metal
+   * mandate on the rail is the only lock left. Every skipped check is logged.
+   */
+  demo?: { bypassQuoteCheck: boolean };
+  /** After a hold increment succeeds (Airwallex, clearing, ledger), e.g. to raise a mandate's budget. */
+  onHoldIncremented?: (jobId: string, from: Micros, to: Micros) => Promise<void>;
 }
 
 export interface RunOptions {
@@ -363,7 +370,17 @@ export class Orchestrator {
     const key = `${prefix}${prior.length + 1}`;
 
     const quote = await providers.requestQuote(p.id, step, key);
-    const check = sabotage?.skipQuoteCheck ? ({ ok: true } as const) : verifyQuote(quote, p, step, policy);
+    const bypass = this.d.demo?.bypassQuoteCheck === true;
+    if (bypass) {
+      const would = verifyQuote(quote, p, step, policy);
+      ledger.log(jobId, "demo.quote_check_skipped", {
+        providerId: p.id,
+        quoted: quote.amount,
+        payTo: quote.payTo,
+        why: would.ok ? "quote would have passed" : `our check would have refused: ${would.detail}`,
+      });
+    }
+    const check = sabotage?.skipQuoteCheck || bypass ? ({ ok: true } as const) : verifyQuote(quote, p, step, policy);
     if (!check.ok) {
       ledger.recordRefusal({ jobId, stepId: step.id, providerId: p.id, quoted: quote.amount, payTo: quote.payTo, reason: check.detail });
       this.health.set(p.id, recordQuoteViolation(this.health.get(p.id)!, check.detail));
@@ -379,8 +396,17 @@ export class Orchestrator {
     const row = ledger.beginPayment({ key, jobId, stepId: step.id, providerId: p.id, amount, payTo: quote.payTo });
     let txHash = row.txHash;
     if (row.status !== "paid") {
-      txHash = await this.payWithRetries(key, quote.payTo, amount, opts.maxPayRetries ?? 3);
-      if (!txHash) return { kind: "unpaid" };
+      const paid = await this.payWithRetries(key, quote.payTo, amount, opts.maxPayRetries ?? 3);
+      if (paid && "refused" in paid) {
+        // The rail itself said no (e.g. a Metal mandate outside its payee list, cap or budget).
+        const why = `rail refused: ${paid.refused}`;
+        ledger.recordRefusal({ jobId, stepId: step.id, providerId: p.id, quoted: quote.amount, payTo: quote.payTo, reason: why });
+        this.health.set(p.id, recordQuoteViolation(this.health.get(p.id)!, why));
+        ledger.log(jobId, "provider.blocked", { providerId: p.id, why });
+        return { kind: "refused" };
+      }
+      if (!paid) return { kind: "unpaid" };
+      txHash = paid.txHash;
       s.floatSpent += amount;
     }
     await this.signTotal(jobId, quote.payTo);
@@ -410,18 +436,28 @@ export class Orchestrator {
     return { kind: "ok", output: delivered.output, score };
   }
 
-  private async payWithRetries(key: string, payTo: string, amount: Micros, maxRetries: number): Promise<string | undefined> {
+  private async payWithRetries(
+    key: string,
+    payTo: string,
+    amount: Micros,
+    maxRetries: number,
+  ): Promise<{ txHash: string } | { refused: string } | undefined> {
     const { ledger, float, policy, sabotage } = this.d;
     for (let i = 0; i <= maxRetries; i++) {
       const sendKey = sabotage?.freshKeyOnRetry && i > 0 ? `${key}#retry${i}` : key;
       try {
         const { txHash } = await float.pay({ idempotencyKey: sendKey, payTo, amount, asset: policy.asset });
         ledger.markPaid(key, txHash);
-        return txHash;
+        return { txHash };
       } catch (e) {
         if (e instanceof InsufficientFloat) {
           ledger.markFailed(key, String(e));
           return undefined;
+        }
+        if (e instanceof PaymentRefused) {
+          // Nothing moved and retrying would get the same answer.
+          ledger.markFailed(key, e.message);
+          return { refused: e.message };
         }
         if (!(e instanceof TransientError)) throw e;
         ledger.log(null, "payment.retry", { key, attempt: i + 1, error: String(e) });
@@ -431,7 +467,7 @@ export class Orchestrator {
     const settled = await float.lookup(key);
     if (settled) {
       ledger.markPaid(key, settled.txHash);
-      return settled.txHash;
+      return { txHash: settled.txHash };
     }
     ledger.markFailed(key, "not settled after retries");
     return undefined;
@@ -456,6 +492,13 @@ export class Orchestrator {
           ledger.log(jobId, "clearing.deposit_raised", { amount: newTotal, source: this.d.clearing.source });
         }
         ledger.recordIncrement(jobId, newTotal);
+        if (this.d.onHoldIncremented) {
+          // The customer's approval stands even if the follow-up (e.g. raising a mandate) fails;
+          // a mandate that was not raised simply refuses payments past its old budget.
+          await this.d.onHoldIncremented(jobId, current, newTotal).catch((e) =>
+            ledger.log(jobId, "hold.increment_followup_failed", { error: String(e) }),
+          );
+        }
         return;
       } catch (e) {
         ledger.log(jobId, "hold.increment_failed", { error: String(e) });

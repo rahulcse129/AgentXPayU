@@ -1,244 +1,300 @@
 /**
- * Metal mandate layer: an on-chain second lock that sits beside our own policy checks.
+ * Metal mandates: an on-chain second lock that every provider payment goes THROUGH (§5.3).
  *
- * §5.3 of the project prompt. When a job batch starts, we create a mandate on the agent's
- * Metal account and bind it. The mandate enforces three limits directly on the blockchain:
- *   1. PAYEE ALLOWLIST — the agent can only pay the registered addresses from catalog.ts.
- *      The rogue provider's wrong_payee attack is refused by Metal itself, even if our own
- *      verifyQuote is bypassed.
- *   2. PER-PAYMENT CAP — the largest single step allowed by policy (cents(5) = 5¢).
- *   3. TOTAL BUDGET — sized to the job batch's float.
+ * A mandate lets the agent pay from the owner's MetalAccount within limits the account itself
+ * enforces on chain: a payee allowlist (the registered payTo addresses from catalog.ts), a
+ * per-payment cap and a total budget. Payments are `mandate pull`s: the account checks each one
+ * against the mandate before any token moves, so a bug in our own checks still cannot pay an
+ * unregistered address or exceed the budget.
  *
- * When a hold increase is approved, we raise the mandate budget (after Airwallex's increment
- * succeeds, so the on-chain cap never runs ahead of what the customer approved).
- * When the batch ends (or fails), we revoke the mandate so no further spending is possible.
+ * Lifecycle (MandateManager drives it): open (credential + bind) when the batch's float is
+ * deposited; raise the budget (credential + replace) after a hold increase succeeds; revoke when
+ * the batch ends.
  *
- * The mandate "disable our check" demo moment:
- *   - A demo flag (`MANDATE_TEST=1`) skips verifyQuote in the engine.
- *   - The rogue provider still can't get paid because Metal's on-chain mandate refuses the tx.
- *   - Both the refusal and the mandate tx hash are shown on the dashboard.
+ *  - MetalMandateGateway: LIVE. The real `metal-agent` 0.3.3 commands, as its --help documents
+ *    them: `mandate credential create`, `mandate bind`, `mandate replace`, `mandate revoke`,
+ *    `mandate pull`. Needs an owner MetalAccount (`metal-agent account create`).
+ *  - MockMandateGateway: SIMULATED. The same four rules in memory, settling through MockMetal.
  *
- * Live vs simulated:
- *   - `MetalMandateGateway` calls real metal-agent mandate commands (live mode).
- *   - `MockMandateGateway` follows the same rules in memory (mock / offline mode).
- *   - Both implement `MandateGateway` so the engine and session are identical in both modes.
- *
- * metal-agent 0.3.3 mandate commands (from the installed CLI help):
- *   metal-agent mandate create --payees <addr,...> --per-payment <amt> --budget <amt>
- *   metal-agent mandate bind   --mandate <id> --account <addr>
- *   metal-agent mandate raise  --mandate <id> --budget <amt>   (replaces budget)
- *   metal-agent mandate revoke --mandate <id>
- *
- * We call these via the SDK's JavaScript interface when available, falling back to child_process
- * for the CLI. Mandate tx hashes are recorded in the ledger so the dashboard can display them.
+ * First version by Kavisha (dbe6432); this rewrite routes payments through the mandate and uses
+ * the commands metal-agent actually has.
  */
 import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { createRequire } from "node:module";
+import { mkdirSync } from "node:fs";
+import { join, dirname } from "node:path";
 import type { Micros } from "../money.ts";
-import { toMajorString } from "./mandate-money.ts";
+import { MockMetal } from "./mock-metal.ts";
+import { PaymentRefused, TransientError } from "./types.ts";
+import { toUsdzCents } from "./mandate-money.ts";
 
-const exec = promisify(execFile);
+export interface MandatePayee {
+  address: string;
+  name?: string;
+}
 
-// ------------------------------------------------------------------ port
+export interface MandateTerms {
+  payees: MandatePayee[];
+  perPaymentCap: Micros;
+  budget: Micros;
+  description?: string;
+}
 
 export interface MandateInfo {
   mandateId: string;
-  /** tx hash from create */
-  createTx: string;
-  /** tx hash from bind */
+  /** Transaction that bound the mandate on the owner's account ("" when simulated). */
   bindTx: string;
-  /** per-payment cap in micros */
   perPaymentCap: Micros;
-  /** total budget in micros */
   budget: Micros;
-  /** allowlisted payee addresses */
   payees: string[];
-  /** null until revoked */
   revokeTx: string | null;
   source: "live" | "simulated";
 }
 
+/** The mandate refused the payment; nothing moved. */
+export class MandateRefused extends PaymentRefused {}
+
 export interface MandateGateway {
   readonly source: "live" | "simulated";
+  /** The account payments come from (the owner's MetalAccount when live). */
+  readonly payer: string;
+  open(terms: MandateTerms): Promise<MandateInfo>;
+  /** Raise the total budget. Spend so far carries over. */
+  raiseBudget(newBudget: Micros): Promise<{ tx: string }>;
+  revoke(): Promise<{ tx: string }>;
   /**
-   * Create and bind a mandate for the batch.
-   * Called once when float is deposited, before any payment.
+   * Pay `amount` to `payTo` under the mandate. At most once per paymentId.
+   * Throws MandateRefused when the mandate says no, TransientError when the outcome is unknown.
    */
-  create(opts: {
-    payees: string[];
-    perPaymentCap: Micros;
-    budget: Micros;
-    agentAddress: string;
-  }): Promise<MandateInfo>;
-
-  /**
-   * Raise the mandate's budget to newTotal (called after Airwallex increment_authorization
-   * succeeds and BEFORE spending continues past the old budget).
-   */
-  raise(mandateId: string, newTotal: Micros): Promise<{ tx: string }>;
-
-  /**
-   * Revoke the mandate at job end. After this, Metal will refuse any payment under it.
-   */
-  revoke(mandateId: string): Promise<{ tx: string }>;
+  pull(req: { paymentId: string; payTo: string; amount: Micros }): Promise<{ txHash: string }>;
+  lookup(paymentId: string): Promise<{ txHash: string; amount: Micros } | null>;
 }
 
-// ------------------------------------------------------------------ mock (offline / tests)
+// ------------------------------------------------------------------ simulated
 
-let mockSeq = 0;
-
+/** The mandate's rules in memory, settling through MockMetal so the sim's rail checks still apply. */
 export class MockMandateGateway implements MandateGateway {
   readonly source = "simulated" as const;
+  readonly payer = "0x00000000000000000000000000000000000a11ce";
+  private info: MandateInfo | null = null;
+  private seq = 0;
 
-  /** All mandates created this session, keyed by id. For test assertions. */
-  readonly mandates = new Map<string, MandateInfo>();
+  constructor(readonly metal: MockMetal = new MockMetal()) {}
 
-  async create(opts: { payees: string[]; perPaymentCap: Micros; budget: Micros; agentAddress: string }): Promise<MandateInfo> {
-    const id = `mock-mandate-${++mockSeq}`;
-    const info: MandateInfo = {
-      mandateId: id,
-      createTx: `0xmock-create-${id}`,
-      bindTx: `0xmock-bind-${id}`,
-      perPaymentCap: opts.perPaymentCap,
-      budget: opts.budget,
-      payees: opts.payees.map((p) => p.toLowerCase()),
+  get mandate(): MandateInfo | null {
+    return this.info;
+  }
+
+  async open(terms: MandateTerms): Promise<MandateInfo> {
+    if (this.info && !this.info.revokeTx) throw new Error("a mandate is already open");
+    this.info = {
+      mandateId: `sim-mandate-${++this.seq}`,
+      bindTx: "",
+      perPaymentCap: terms.perPaymentCap,
+      budget: terms.budget,
+      payees: terms.payees.map((p) => p.address.toLowerCase()),
       revokeTx: null,
       source: "simulated",
     };
-    this.mandates.set(id, info);
-    return info;
+    await this.metal.deposit(terms.budget);
+    return this.info;
   }
 
-  async raise(mandateId: string, newTotal: Micros): Promise<{ tx: string }> {
-    const m = this.mandates.get(mandateId);
-    if (!m) throw new Error(`mandate ${mandateId} not found`);
-    m.budget = newTotal;
-    return { tx: `0xmock-raise-${mandateId}-${newTotal}` };
+  async raiseBudget(newBudget: Micros) {
+    const m = this.must();
+    if (newBudget <= m.budget) throw new Error(`new budget ${newBudget} is not above ${m.budget}`);
+    await this.metal.deposit(newBudget - m.budget);
+    m.budget = newBudget;
+    return { tx: "" };
   }
 
-  async revoke(mandateId: string): Promise<{ tx: string }> {
-    const m = this.mandates.get(mandateId);
-    if (!m) throw new Error(`mandate ${mandateId} not found`);
-    m.revokeTx = `0xmock-revoke-${mandateId}`;
-    return { tx: m.revokeTx };
+  async revoke() {
+    const m = this.must();
+    m.revokeTx = "";
+    const left = await this.metal.balance();
+    if (left > 0) await this.metal.withdraw(left);
+    return { tx: "" };
   }
 
-  /**
-   * Check whether a payment would be allowed by this mandate.
-   * Used by the demo "mandate test" to show Metal refusing rogue payments even with our
-   * own verifyQuote disabled.
-   */
-  wouldAllow(mandateId: string, payTo: string, amount: Micros): { allowed: boolean; reason?: string } {
-    const m = this.mandates.get(mandateId);
-    if (!m) return { allowed: false, reason: "mandate not found" };
-    if (m.revokeTx) return { allowed: false, reason: "mandate revoked" };
-    if (!m.payees.includes(payTo.toLowerCase())) {
-      return { allowed: false, reason: `payee ${payTo} not in allowlist` };
-    }
-    if (amount > m.perPaymentCap) {
-      return { allowed: false, reason: `amount ${amount} > per-payment cap ${m.perPaymentCap}` };
-    }
-    return { allowed: true };
+  async pull(req: { paymentId: string; payTo: string; amount: Micros }) {
+    const prior = await this.metal.lookup(req.paymentId);
+    if (prior) return this.metal.pay({ idempotencyKey: req.paymentId, payTo: req.payTo, amount: req.amount, asset: "USDZ" });
+    const m = this.must();
+    if (m.revokeTx !== null) throw new MandateRefused("Metal mandate: revoked");
+    if (!m.payees.includes(req.payTo.toLowerCase())) throw new MandateRefused(`Metal mandate: payee ${req.payTo} is not on the mandate's payee list`);
+    if (req.amount > m.perPaymentCap) throw new MandateRefused(`Metal mandate: ${req.amount} micros exceeds the per-payment cap ${m.perPaymentCap}`);
+    if (this.metal.totalSettled() + req.amount > m.budget) throw new MandateRefused(`Metal mandate: payment would exceed the budget ${m.budget}`);
+    return this.metal.pay({ idempotencyKey: req.paymentId, payTo: req.payTo, amount: req.amount, asset: "USDZ" });
+  }
+
+  lookup(paymentId: string) {
+    return this.metal.lookup(paymentId);
+  }
+
+  private must(): MandateInfo {
+    if (!this.info) throw new MandateRefused("Metal mandate: none open");
+    return this.info;
   }
 }
 
-// ------------------------------------------------------------------ live (Metal testnet)
+// ------------------------------------------------------------------ live (metal-agent CLI)
 
-/**
- * Calls the `metal-agent mandate` CLI commands that ship with @metalntwx/metal-agent@0.3.3.
- * Each command returns a JSON object with { mandateId?, tx } on success.
- *
- * We use the CLI rather than a JS SDK because metal-agent 0.3.3 does not export mandate
- * functions from its Node entry-point (confirmed by reading node_modules). The CLI is the
- * documented interface (hackathon track channel, 2026-10-31).
- *
- * Usage: set METAL_PRIVATE_KEY and METAL_RPC_URL; the CLI reads them from env / the key file.
- */
+export interface MetalMandateConfig {
+  /** The owner's MetalAccount address (`metal-agent account create` prints it). */
+  principal: string;
+  /** Owner key file: signs credentials and pays the gas of bind / replace / revoke. */
+  ownerKeyFile: string;
+  rpcUrl: string;
+  /** Where credentials and the mandate key live. Holds a private key: keep it outside the repo. */
+  workDir: string;
+}
+
+const require = createRequire(import.meta.url);
+const CLI = join(dirname(require.resolve("@metalntwx/metal-agent/package.json")), "dist", "index.js");
+
+/** `key value` lines, as every metal-agent command prints them. */
+export function parseCliOutput(out: string): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const line of out.split(/\r?\n/)) {
+    const i = line.indexOf(" ");
+    if (i > 0 && !m.has(line.slice(0, i))) m.set(line.slice(0, i), line.slice(i + 1).trim());
+  }
+  return m;
+}
+
+const txOf = (kv: Map<string, string>, out: string): string =>
+  (kv.get("transaction") ?? kv.get("tx") ?? out.match(/0x[0-9a-fA-F]{64}/)?.[0] ?? "").split(/\s/)[0]!;
+
 export class MetalMandateGateway implements MandateGateway {
   readonly source = "live" as const;
+  private info: MandateInfo | null = null;
+  private credential = "";
+  private mandateKeyFile = "";
+  private n = 0;
+  /** paymentId → what was asked, so lookup can re-ask the CLI (which pays at most once per id). */
+  private readonly asked = new Map<string, { payTo: string; amount: Micros }>();
 
-  constructor(
-    private readonly env: NodeJS.ProcessEnv = process.env,
-    /** Path to the metal-agent binary (default: npx metal-agent). */
-    private readonly bin = "metal-agent",
-  ) {}
+  constructor(private readonly cfg: MetalMandateConfig) {
+    mkdirSync(cfg.workDir, { recursive: true });
+  }
 
+  get payer(): string {
+    return this.cfg.principal;
+  }
+
+  /** METAL_OWNER_ACCOUNT, METAL_OWNER_KEY_FILE, METAL_RPC_URL, METAL_MANDATE_DIR. */
   static fromEnv(env: NodeJS.ProcessEnv = process.env): MetalMandateGateway {
-    if (!env.METAL_PRIVATE_KEY || !env.METAL_RPC_URL) {
-      throw new Error("MetalMandateGateway needs METAL_PRIVATE_KEY and METAL_RPC_URL");
+    const principal = env.METAL_OWNER_ACCOUNT?.trim();
+    const ownerKeyFile = env.METAL_OWNER_KEY_FILE?.trim();
+    const rpcUrl = env.METAL_RPC_URL?.trim();
+    if (!principal || !ownerKeyFile || !rpcUrl) {
+      throw new Error("live mandates need METAL_OWNER_ACCOUNT, METAL_OWNER_KEY_FILE and METAL_RPC_URL (see `metal-agent account create`)");
     }
-    return new MetalMandateGateway(env);
+    const home = env.USERPROFILE ?? env.HOME ?? ".";
+    return new MetalMandateGateway({ principal, ownerKeyFile, rpcUrl, workDir: env.METAL_MANDATE_DIR?.trim() || join(home, ".metal-agent", "margin-mandates") });
   }
 
-  private async run(args: string[]): Promise<Record<string, unknown>> {
-    const env = {
-      ...this.env,
-      METAL_RPC_URL: this.env.METAL_RPC_URL,
-      METAL_PRIVATE_KEY: this.env.METAL_PRIVATE_KEY,
-    };
-    try {
-      const { stdout } = await exec(this.bin, ["mandate", ...args, "--json"], {
-        env,
-        timeout: 60_000,
+  private run(args: string[]): Promise<{ code: number; out: string; kv: Map<string, string> }> {
+    const full = [CLI, ...args, "--network", "testnet", ...(args[1] === "credential" ? [] : ["--rpc-url", this.cfg.rpcUrl])];
+    return new Promise((resolve) => {
+      execFile(process.execPath, full, { timeout: 180_000, maxBuffer: 1 << 20 }, (err, stdout, stderr) => {
+        const out = `${stdout}\n${stderr}`.replaceAll(this.cfg.rpcUrl, "<rpc>");
+        const code = err ? (typeof (err as { code?: unknown }).code === "number" ? ((err as { code: number }).code) : 1) : 0;
+        resolve({ code, out, kv: parseCliOutput(out) });
       });
-      return JSON.parse(stdout.trim()) as Record<string, unknown>;
-    } catch (e) {
-      // If the binary doesn't exist in PATH, npx will fetch it. Surface the error clearly.
-      throw new Error(`metal-agent mandate ${args[0]} failed: ${String(e)}`);
-    }
+    });
   }
 
-  async create(opts: { payees: string[]; perPaymentCap: Micros; budget: Micros; agentAddress: string }): Promise<MandateInfo> {
-    // Step 1: create mandate
-    const created = await this.run([
-      "create",
-      "--payees", opts.payees.join(","),
-      "--per-payment", toMajorString(opts.perPaymentCap),
-      "--budget", toMajorString(opts.budget),
-      "--network", "testnet",
-    ]);
-    const mandateId = String(created.mandateId ?? created.id ?? "");
-    const createTx = String(created.tx ?? created.txHash ?? "");
-    if (!mandateId) throw new Error(`metal-agent mandate create did not return a mandateId: ${JSON.stringify(created)}`);
+  private async writeCredential(terms: MandateTerms, file: string, reuseKey?: string) {
+    const args = [
+      "mandate", "credential", "create",
+      "--principal", this.cfg.principal,
+      "--cap", toUsdzCents(terms.perPaymentCap),
+      "--budget", toUsdzCents(terms.budget),
+      "--out", file,
+      "--key", this.cfg.ownerKeyFile,
+      ...(terms.description ? ["--description", terms.description] : []),
+      ...terms.payees.flatMap((p) => ["--payee", p.name ? `${p.address},${p.name}` : p.address]),
+      ...(reuseKey ? ["--mandate-key-file", reuseKey] : []),
+    ];
+    const r = await this.run(args);
+    if (r.code !== 0) throw new Error(`metal-agent mandate credential create failed: ${r.out.trim().slice(0, 400)}`);
+    const id = r.kv.get("mandate");
+    if (!id) throw new Error(`credential create printed no mandate id: ${r.out.slice(0, 300)}`);
+    return { mandateId: id, keyFile: r.kv.get("mandate-key-file")?.split(" ")[0] ?? file.replace(/\.json$/, ".key.json") };
+  }
 
-    // Step 2: bind to agent account
-    const bound = await this.run([
-      "bind",
-      "--mandate", mandateId,
-      "--account", opts.agentAddress,
-      "--network", "testnet",
-    ]);
-    const bindTx = String(bound.tx ?? bound.txHash ?? "");
+  private terms: MandateTerms | null = null;
 
-    return {
+  async open(terms: MandateTerms): Promise<MandateInfo> {
+    if (this.info && !this.info.revokeTx) throw new Error("a mandate is already open");
+    const file = join(this.cfg.workDir, `margin-${Date.now()}-${++this.n}.json`);
+    const { mandateId, keyFile } = await this.writeCredential(terms, file);
+    const bound = await this.run(["mandate", "bind", "--credential", file, "--key", this.cfg.ownerKeyFile]);
+    if (bound.code !== 0) throw new Error(`metal-agent mandate bind failed: ${bound.out.trim().slice(0, 400)}`);
+    this.credential = file;
+    this.mandateKeyFile = keyFile;
+    this.terms = terms;
+    this.info = {
       mandateId,
-      createTx,
-      bindTx,
-      perPaymentCap: opts.perPaymentCap,
-      budget: opts.budget,
-      payees: opts.payees.map((p) => p.toLowerCase()),
+      bindTx: txOf(bound.kv, bound.out),
+      perPaymentCap: terms.perPaymentCap,
+      budget: terms.budget,
+      payees: terms.payees.map((p) => p.address.toLowerCase()),
       revokeTx: null,
       source: "live",
     };
+    return this.info;
   }
 
-  async raise(mandateId: string, newTotal: Micros): Promise<{ tx: string }> {
-    const result = await this.run([
-      "raise",
-      "--mandate", mandateId,
-      "--budget", toMajorString(newTotal),
-      "--network", "testnet",
-    ]);
-    return { tx: String(result.tx ?? result.txHash ?? "") };
+  async raiseBudget(newBudget: Micros) {
+    if (!this.info || !this.terms) throw new Error("no mandate open");
+    // A wider credential under the same mandate key replaces the old one in one transaction;
+    // what was spent carries over into the new budget.
+    const file = join(this.cfg.workDir, `margin-${Date.now()}-${++this.n}.json`);
+    const terms = { ...this.terms, budget: newBudget };
+    const { mandateId } = await this.writeCredential(terms, file, this.mandateKeyFile);
+    const r = await this.run(["mandate", "replace", "--credential", file, "--replaces", this.credential, "--key", this.cfg.ownerKeyFile]);
+    if (r.code !== 0) throw new Error(`metal-agent mandate replace failed: ${r.out.trim().slice(0, 400)}`);
+    this.credential = file;
+    this.terms = terms;
+    this.info = { ...this.info, mandateId, budget: newBudget };
+    return { tx: txOf(r.kv, r.out) };
   }
 
-  async revoke(mandateId: string): Promise<{ tx: string }> {
-    const result = await this.run([
-      "revoke",
-      "--mandate", mandateId,
-      "--network", "testnet",
+  async revoke() {
+    if (!this.info) throw new Error("no mandate open");
+    const r = await this.run(["mandate", "revoke", "--credential", this.credential, "--key", this.cfg.ownerKeyFile]);
+    if (r.code !== 0) throw new Error(`metal-agent mandate revoke failed: ${r.out.trim().slice(0, 400)}`);
+    this.info.revokeTx = txOf(r.kv, r.out);
+    return { tx: this.info.revokeTx };
+  }
+
+  async pull(req: { paymentId: string; payTo: string; amount: Micros }) {
+    if (!this.credential) throw new MandateRefused("Metal mandate: none open");
+    const amount = toUsdzCents(req.amount);
+    this.asked.set(req.paymentId, { payTo: req.payTo, amount: req.amount });
+    const r = await this.run([
+      "mandate", "pull", "--credential", this.credential, "--to", req.payTo, "--amount", amount,
+      "--payment-id", req.paymentId, "--mandate-key-file", this.mandateKeyFile,
     ]);
-    return { tx: String(result.tx ?? result.txHash ?? "") };
+    // Exit codes from `metal-agent mandate pull --help`: 0 paid, 1 refused or error, 3 pending, 4 held in the payee's escrow.
+    if (r.code === 0 || r.code === 4) return { txHash: txOf(r.kv, r.out) };
+    if (r.code === 3) throw new TransientError(`mandate pull pending: ${r.out.trim().slice(0, 200)}`);
+    if (/refus/i.test(r.out)) throw new MandateRefused(`Metal mandate refused on chain: ${r.out.trim().slice(0, 300)}`);
+    // Any other failure may or may not have reached the chain; the same payment id pays at most once.
+    throw new TransientError(`mandate pull failed: ${r.out.trim().slice(0, 300)}`);
+  }
+
+  async lookup(paymentId: string) {
+    const asked = this.asked.get(paymentId);
+    if (!asked) return null;
+    // Re-asking with the same id reports an earlier payout instead of paying again (CLI help).
+    try {
+      const { txHash } = await this.pull({ paymentId, ...asked });
+      return { txHash, amount: asked.amount };
+    } catch {
+      return null;
+    }
   }
 }
-

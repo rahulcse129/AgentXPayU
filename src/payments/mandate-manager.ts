@@ -1,187 +1,138 @@
 /**
- * MandateManager: wires mandate lifecycle into an Orchestrator run.
+ * MandateManager: the engine's float when payments go through a Metal mandate.
  *
- * Sits beside the engine: the engine focuses on money; this focuses on the on-chain locks.
+ * It is a FloatGateway, so the engine needs no special path:
+ *   deposit(float)      → open the mandate (credential + bind) with budget = the batch's float
+ *   pay(key, ...)       → `mandate pull` under it; the mandate checks payee, cap and budget first
+ *   lookup(key)         → the mandate rail's record of that payment id
+ *   onHoldIncreased()   → raise the budget, called only after the Airwallex increment succeeded
+ *   close()             → revoke at batch end; nothing can be paid under it afterwards
  *
- * Usage in a run:
- *   const mm = new MandateManager(gateway, catalog, ledger);
- *   await mm.openBatch(float, agentAddress);       // create + bind mandate
- *   // ... engine runs jobs ...
- *   await mm.onHoldIncreased(jobId, newTotal);     // raise mandate budget (after Airwallex ok)
- *   await mm.closeBatch();                         // revoke mandate
+ * Every step is written to the ledger (mandate.opened / raised / revoked / refused) so the feed,
+ * receipts and dashboard show both locks: our policy check, then Metal's mandate.
  *
- * The mandate demo moment:
- *   mm.bypassPolicyCheck = true;                   // simulates our verifyQuote being disabled
- *   mm.wouldMandateAllow(payTo, amount)             // Metal on-chain check still runs
- *
- * All mandate tx hashes go into the ledger so the dashboard can display them in receipts
- * and show the dual-lock status ("Policy check ✓ · Metal mandate ✓").
+ * First version by Kavisha (dbe6432): lifecycle and ledger events. This version makes the
+ * mandate the payment path instead of a check beside it.
  */
 import type { Ledger } from "../ledger/ledger.ts";
 import type { ProviderSpec } from "../policy/types.ts";
 import type { Micros } from "../money.ts";
-import { cents } from "../money.ts";
-import { type MandateGateway, type MandateInfo, MockMandateGateway, MetalMandateGateway } from "./mandate.ts";
+import { InsufficientFloat, type FloatGateway } from "./types.ts";
+import { MandateRefused, type MandateGateway, type MandateInfo } from "./mandate.ts";
 
-export class MandateManager {
+export class MandateManager implements FloatGateway {
   private mandate: MandateInfo | null = null;
-
-  /**
-   * When true, the engine skips its own verifyQuote (the deliberate demo weakness).
-   * Metal's mandate still enforces the allowlist and per-payment cap.
-   */
-  bypassPolicyCheck = false;
+  private allocated: Micros = 0;
+  private readonly paid = new Map<string, { payTo: string; amount: Micros; txHash: string }>();
+  private ledger: Ledger | null = null;
 
   constructor(
-    private readonly gateway: MandateGateway,
+    readonly gateway: MandateGateway,
     private readonly catalog: ProviderSpec[],
-    private readonly ledger: Ledger,
+    /** The largest single payment the mandate allows. */
+    private readonly perPaymentCap: Micros,
   ) {}
 
-  get active(): MandateInfo | null {
-    return this.mandate;
+  /** Ledger for the current run (created per run, after this manager). */
+  attach(ledger: Ledger): this {
+    this.ledger = ledger;
+    return this;
   }
 
   get source(): "live" | "simulated" {
     return this.gateway.source;
   }
 
-  /**
-   * Create and bind a mandate for the whole batch.
-   * @param budget  Total float for this batch (in micros).
-   * @param agentAddress  The Metal agent wallet address (from MetalFloatGateway.address or env).
-   */
-  async openBatch(budget: Micros, agentAddress: string): Promise<MandateInfo> {
-    if (this.mandate) throw new Error("mandate already open; call closeBatch first");
-
-    const payees = this.catalog.map((p) => p.payTo);
-    // The largest single step the catalog allows (model-premium @ 5¢/unit × max 1 unit = 5¢).
-    const perPaymentCap: Micros = cents(5);
-
-    const info = await this.gateway.create({ payees, perPaymentCap, budget, agentAddress });
-    this.mandate = info;
-
-    this.ledger.log(null, "mandate.created", {
-      mandateId: info.mandateId,
-      createTx: info.createTx,
-      bindTx: info.bindTx,
-      payees: info.payees.length,
-      perPaymentCap,
-      budget,
-      source: info.source,
-    });
-
-    return info;
+  get active(): MandateInfo | null {
+    return this.mandate;
   }
 
-  /**
-   * Raise the mandate's budget after a customer approves a hold increase.
-   * Must be called AFTER Airwallex increment_authorization succeeds.
-   * @param newTotal  The new authorized total in micros.
-   */
-  async onHoldIncreased(newTotal: Micros): Promise<string> {
-    if (!this.mandate) throw new Error("no active mandate");
-    const { tx } = await this.gateway.raise(this.mandate.mandateId, newTotal);
-    this.mandate.budget = newTotal;
-
-    this.ledger.log(null, "mandate.raised", {
-      mandateId: this.mandate.mandateId,
-      raiseTx: tx,
-      newTotal,
-      source: this.mandate.source,
-    });
-
-    return tx;
+  async deposit(amount: Micros): Promise<{ txHash: string }> {
+    if (!this.mandate) {
+      const info = await this.gateway.open({
+        payees: this.catalog.map((p) => ({ address: p.payTo, name: p.id })),
+        perPaymentCap: this.perPaymentCap,
+        budget: amount,
+        description: "Margin job batch",
+      });
+      this.mandate = info;
+      this.allocated = amount;
+      this.ledger?.log(null, "mandate.opened", {
+        mandateId: info.mandateId,
+        bindTx: info.bindTx,
+        payees: info.payees.length,
+        perPaymentCap: info.perPaymentCap,
+        budget: info.budget,
+        source: info.source,
+      });
+      return { txHash: info.bindTx };
+    }
+    await this.raiseTo(this.mandate.budget + amount, "float topped up");
+    this.allocated += amount;
+    return { txHash: "" };
   }
 
-  /**
-   * Revoke the mandate at job end. After this Metal refuses all further payments.
-   */
-  async closeBatch(): Promise<string> {
-    if (!this.mandate) return "";
-    const { tx } = await this.gateway.revoke(this.mandate.mandateId);
+  async pay(req: { idempotencyKey: string; payTo: string; amount: Micros; asset: string }): Promise<{ txHash: string }> {
+    const { idempotencyKey: key, payTo, amount, asset } = req;
+    if (asset !== "USDZ") throw new Error(`mandates pay in USDZ only, asked for ${asset}`);
+    const prior = this.paid.get(key);
+    if (prior) {
+      if (prior.amount !== amount || prior.payTo.toLowerCase() !== payTo.toLowerCase()) throw new Error(`payment ${key} replayed with a different payload`);
+      return { txHash: prior.txHash };
+    }
+    if (amount > (await this.balance())) throw new InsufficientFloat(`float ${await this.balance()} < ${amount}`);
+    try {
+      const { txHash } = await this.gateway.pull({ paymentId: key, payTo, amount });
+      this.paid.set(key, { payTo, amount, txHash });
+      return { txHash };
+    } catch (e) {
+      if (e instanceof MandateRefused) {
+        this.ledger?.log(null, "mandate.refused", { key, payTo, amount, why: e.message, mandateId: this.mandate?.mandateId, source: this.source });
+      }
+      throw e;
+    }
+  }
+
+  async lookup(key: string): Promise<{ txHash: string; amount: Micros } | null> {
+    const known = this.paid.get(key);
+    if (known) return { txHash: known.txHash, amount: known.amount };
+    const found = await this.gateway.lookup(key);
+    if (found) this.paid.set(key, { payTo: "", amount: found.amount, txHash: found.txHash });
+    return found;
+  }
+
+  /** Accounting only: the unspent budget simply stays unspent until close() revokes the mandate. */
+  async withdraw(amount: Micros): Promise<{ txHash: string }> {
+    if (amount > (await this.balance())) throw new InsufficientFloat(`withdraw ${amount} > float left ${await this.balance()}`);
+    this.allocated -= amount;
+    return { txHash: "" };
+  }
+
+  async balance(): Promise<Micros> {
+    let spent = 0;
+    for (const p of this.paid.values()) spent += p.amount;
+    return this.allocated - spent;
+  }
+
+  /** After a customer-approved hold increase succeeded: the mandate budget grows by the same amount. */
+  async onHoldIncreased(jobId: string, from: Micros, to: Micros): Promise<void> {
+    if (!this.mandate || to <= from) return;
+    await this.raiseTo(this.mandate.budget + (to - from), `job ${jobId} hold raised ${from} → ${to}`);
+  }
+
+  async close(): Promise<string> {
+    if (!this.mandate || this.mandate.revokeTx !== null) return "";
+    const { tx } = await this.gateway.revoke();
     this.mandate.revokeTx = tx;
-
-    this.ledger.log(null, "mandate.revoked", {
-      mandateId: this.mandate.mandateId,
-      revokeTx: tx,
-      source: this.mandate.source,
-    });
-
+    this.ledger?.log(null, "mandate.revoked", { mandateId: this.mandate.mandateId, revokeTx: tx, source: this.source });
     return tx;
   }
 
-  /**
-   * Check whether a payment would be allowed by the active mandate.
-   * Used by the demo "mandate test": with bypassPolicyCheck=true, the engine skips
-   * verifyQuote, but this check still enforces the on-chain allowlist and cap.
-   *
-   * Returns { allowed: true } or { allowed: false, reason: "..." }.
-   */
-  wouldMandateAllow(payTo: string, amount: Micros): { allowed: boolean; reason?: string } {
-    if (!this.mandate) return { allowed: false, reason: "no active mandate" };
-    if (this.mandate.revokeTx) return { allowed: false, reason: "mandate already revoked" };
-
-    const knownPayee = this.mandate.payees.includes(payTo.toLowerCase());
-    if (!knownPayee) {
-      const reason = `Metal mandate: payee ${payTo} not in allowlist (${this.mandate.payees.length} registered)`;
-      this.ledger.log(null, "mandate.blocked", { payTo, amount, reason, mandateId: this.mandate.mandateId });
-      return { allowed: false, reason };
-    }
-
-    if (amount > this.mandate.perPaymentCap) {
-      const reason = `Metal mandate: amount ${amount} micros exceeds per-payment cap ${this.mandate.perPaymentCap} micros`;
-      this.ledger.log(null, "mandate.blocked", { payTo, amount, reason, mandateId: this.mandate.mandateId });
-      return { allowed: false, reason };
-    }
-
-    return { allowed: true };
+  private async raiseTo(newBudget: Micros, why: string) {
+    const m = this.mandate!;
+    const { tx } = await this.gateway.raiseBudget(newBudget);
+    const from = m.budget;
+    m.budget = newBudget;
+    this.ledger?.log(null, "mandate.raised", { mandateId: m.mandateId, from, to: newBudget, raiseTx: tx, why, source: this.source });
   }
-
-  /**
-   * Summary for the dashboard dual-lock display and receipts.
-   */
-  status(): {
-    source: "live" | "simulated";
-    mandateId: string | null;
-    createTx: string | null;
-    bindTx: string | null;
-    revokeTx: string | null;
-    budget: Micros;
-    perPaymentCap: Micros;
-    payeeCount: number;
-    bypassActive: boolean;
-  } {
-    return {
-      source: this.gateway.source,
-      mandateId: this.mandate?.mandateId ?? null,
-      createTx: this.mandate?.createTx ?? null,
-      bindTx: this.mandate?.bindTx ?? null,
-      revokeTx: this.mandate?.revokeTx ?? null,
-      budget: this.mandate?.budget ?? 0,
-      perPaymentCap: this.mandate?.perPaymentCap ?? 0,
-      payeeCount: this.mandate?.payees.length ?? 0,
-      bypassActive: this.bypassPolicyCheck,
-    };
-  }
-}
-
-/**
- * Build a MandateManager from environment.
- * Live mode: needs METAL_PRIVATE_KEY + METAL_RPC_URL and MODE != mock.
- * Mock mode (or if keys missing): uses MockMandateGateway.
- */
-export function mandateManagerFromEnv(
-  catalog: ProviderSpec[],
-  ledger: Ledger,
-  env: NodeJS.ProcessEnv = process.env,
-  gateway?: MandateGateway,
-): MandateManager {
-  if (gateway) return new MandateManager(gateway, catalog, ledger);
-  if (env.METAL_PRIVATE_KEY && env.METAL_RPC_URL && env.MODE !== "mock") {
-    // Live: import MetalMandateGateway lazily (requires viem + metal-pay).
-    // Caller must handle async; use MetalMandateGateway.fromEnv(env) directly in live session.
-    throw new Error("Use MetalMandateGateway.fromEnv(env) directly in live mode (async boundary).");
-  }
-  return new MandateManager(new MockMandateGateway(), catalog, ledger);
 }

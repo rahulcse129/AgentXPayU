@@ -20,7 +20,8 @@
     "smoke:airwallex": "node --no-warnings --env-file-if-exists=.env --import tsx scripts/airwallex-smoke.ts",
     "test:live": "node --no-warnings --env-file-if-exists=.env --import tsx --test test/contracts.test.ts",
     "live:x402": "node --no-warnings --env-file-if-exists=.env --import tsx scripts/live-x402-run.ts",
-    "engine:live": "node --no-warnings --env-file-if-exists=.env --import tsx src/server/main.ts --live-metal --no-llm"
+    "engine:live": "node --no-warnings --env-file-if-exists=.env --import tsx src/server/main.ts --live-metal --no-llm",
+    "engine:live-mandate": "node --no-warnings --env-file-if-exists=.env --import tsx src/server/main.ts --live-mandate --no-llm"
   },
   "engines": {
     "node": ">=22.13"

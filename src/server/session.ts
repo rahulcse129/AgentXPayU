@@ -23,8 +23,9 @@ import { MockMetal } from "../payments/mock-metal.ts";
 import type { FloatGateway } from "../payments/types.ts";
 import type { MetalFloatGateway } from "../payments/metal.ts";
 import { auditPaymentsOnChain, METAL_EXPLORER_TX } from "../payments/metal-audit.ts";
-import { MockMandateGateway } from "../payments/mandate.ts";
+import { MockMandateGateway, type MetalMandateGateway } from "../payments/mandate.ts";
 import { MandateManager } from "../payments/mandate-manager.ts";
+import { freshHealth } from "../policy/policy.ts";
 import { InProcessProviders } from "../providers/in-process.ts";
 import { HttpProviders } from "../providers/http-client.ts";
 import { createProviderServer } from "../providers/server.ts";
@@ -87,13 +88,21 @@ export interface RunSummary {
   llm: { calls: number; failures: number; tripped: string | null } | null;
   /** Where "rail settled" came from: the mock rail, or each transaction re-read from Metal testnet. */
   rail: { source: "live" | "simulated"; payer?: string; network?: string };
+  /** The Metal mandate the batch paid through, if any (the second lock). */
+  mandate: { source: "live" | "simulated"; mandateId: string; bindTx: string; revokeTx: string | null; budget: Micros; perPaymentCap: Micros; payees: number } | null;
 }
 
-/** The live Metal rail for dashboard runs. */
+/** The live Metal rail for dashboard runs: x402 straight from the agent wallet, no mandate. */
 export interface LiveMetal {
   rpcUrl: string;
   /** A fresh gateway per run, so float accounting starts at zero. */
   makeFloat: () => MetalFloatGateway;
+}
+
+/** The live Metal rail through a mandate: payments are `mandate pull`s from the owner's account. */
+export interface LiveMandate {
+  rpcUrl: string;
+  makeGateway: () => MetalMandateGateway;
 }
 
 /** Providers the engine buys from, plus the demo-control hooks on them. */
@@ -171,13 +180,29 @@ export class DemoSession {
   private ledger: Ledger | null = null;
   private pendingOverrun = false;
   private mandateManager: MandateManager | null = null;
+  private engine: Orchestrator | null = null;
+  /** The dashboard's "mandate test" switch, read by the engine on every purchase. */
+  private readonly demo = { bypassQuoteCheck: false };
 
   constructor(
-    private readonly opts: { llm?: GuardedLlm; paceScale?: number; approvalTimeoutMs?: number; live?: LiveMetal } = {},
+    private readonly opts: {
+      llm?: GuardedLlm;
+      paceScale?: number;
+      approvalTimeoutMs?: number;
+      /** Live x402 from the agent wallet (no mandate). */
+      live?: LiveMetal;
+      /** Live payments through a Metal mandate on the owner's account. */
+      liveMandate?: LiveMandate;
+    } = {},
   ) {}
 
   get railSource(): "live" | "simulated" {
-    return this.opts.live ? "live" : "simulated";
+    return this.opts.live || this.opts.liveMandate ? "live" : "simulated";
+  }
+
+  /** Whether runs pay through a mandate, and whether that mandate is on chain. */
+  get mandateSource(): "live" | "simulated" | "none" {
+    return this.opts.liveMandate ? "live" : this.opts.live ? "none" : "simulated";
   }
 
   get isRunning(): boolean {
@@ -209,10 +234,24 @@ export class DemoSession {
 
   /** Demo buttons. Returns what happened, for the button's toast. */
   async control(action: ControlAction): Promise<{ ok: boolean; message: string }> {
-    if (action === "mandate_test") {
-      return { ok: false, message: "Needs Metal mandates (§5.3), not built yet. Nothing was changed." };
-    }
     if (!this.running || !this.providers || !this.ledger) return { ok: false, message: "Start a run first." };
+    if (action === "mandate_test") {
+      if (!this.mandateManager?.active) {
+        return { ok: false, message: "This run pays straight from the agent wallet, with no mandate. Use engine:offline or engine:live-mandate." };
+      }
+      // Deliberate test: turn OUR quote check off, point the rogue at an unregistered address and
+      // give it another chance. Only the Metal mandate is left to stop the payment.
+      this.demo.bypassQuoteCheck = true;
+      await this.providers.control(ROGUE_PROVIDER_ID, { mode: "wrong_payee" });
+      const rogue = providerById(ROGUE_PROVIDER_ID);
+      this.engine?.health.set(rogue.id, freshHealth(rogue));
+      this.ledger.log(null, "fault.mandate_test", {
+        providerId: rogue.id,
+        why: "deliberate test: our quote check is off and the rogue asks to be paid at an unregistered address; only the Metal mandate can stop it",
+        mandate: this.mandateManager.source,
+      });
+      return { ok: true, message: `Our quote check is OFF. ${rogue.id} will ask to be paid at an unregistered address; watch the ${this.mandateManager.source} Metal mandate refuse it.` };
+    }
     if (action === "overrun_b") {
       if (!this.pendingOverrun) this.pendingOverrun = true;
       return { ok: true, message: "Job B's analysis step will grow ×4 at the next round." };
@@ -248,13 +287,22 @@ export class DemoSession {
 
   private async run(runId: number, scripted: boolean) {
     const rng = seeded(42);
-    const ledger = new Ledger(new MemoryStore(), Date.now, (event) =>
-      this.emit({ kind: "event", runId, event, fact: describe(event), policy: policyReason(event) }),
-    );
+    this.demo.bypassQuoteCheck = false;
+    const ledger: Ledger = new Ledger(new MemoryStore(), Date.now, (event) => {
+      this.emit({ kind: "event", runId, event, fact: describe(event), policy: policyReason(event) });
+      // The mandate test is over once the mandate has refused a payment: our own check comes back on.
+      if (event.type === "mandate.refused" && this.demo.bypassQuoteCheck) {
+        this.demo.bypassQuoteCheck = false;
+        queueMicrotask(() => ledger.log(null, "demo.quote_check_restored", { why: "the Metal mandate refused the payment; our own quote check is back on" }));
+      }
+    });
     const airwallex = new MockAirwallex();
     const live = this.opts.live;
+    const liveMandate = this.opts.liveMandate;
+    const rpcUrl = live?.rpcUrl ?? liveMandate?.rpcUrl;
     let float: FloatGateway;
     let backend: ProviderBackend;
+    let manager: MandateManager | null = null;
     try {
       if (live) {
         const gw = live.makeFloat();
@@ -262,14 +310,22 @@ export class DemoSession {
         await gw.preflight();
         float = gw;
         backend = await liveBackend(live.rpcUrl);
+      } else if (liveMandate) {
+        manager = new MandateManager(liveMandate.makeGateway(), CATALOG, DEFAULT_POLICY.maxHold);
+        float = manager;
+        backend = await liveBackend(liveMandate.rpcUrl);
       } else {
-        float = new MockMetal();
+        // Offline the mandate is simulated, but it still stands between the engine and the rail.
+        manager = new MandateManager(new MockMandateGateway(), CATALOG, DEFAULT_POLICY.maxHold);
+        float = manager;
         backend = mockBackend(rng);
       }
     } catch (e) {
-      this.emit({ kind: "run.failed", runId, error: `live rail not ready: ${String(e).replace(live?.rpcUrl ?? "\u0000", "<rpc>")}` });
+      this.emit({ kind: "run.failed", runId, error: `live rail not ready: ${String(e).replace(rpcUrl ?? "\u0000", "<rpc>")}` });
       return;
     }
+    manager?.attach(ledger);
+    this.mandateManager = manager;
     if (scripted) await backend.control(ROGUE_PROVIDER_ID, { mode: "overquote", overquoteFactor: 3 });
     const llm = this.opts.llm;
     const writer = llm ? new ReportWritingProviders(backend.port, llm, DEMO_TOPICS, (id) => backend.modeOf(id)) : undefined;
@@ -302,7 +358,10 @@ export class DemoSession {
       const engine = new Orchestrator({
         ledger, holds: airwallex, float, providers: recorder, judge, customers: approvals, clearing,
         catalog: CATALOG, policy: DEFAULT_POLICY, rng,
+        demo: this.demo,
+        onHoldIncremented: manager ? (jobId, from, to) => manager!.onHoldIncreased(jobId, from, to) : undefined,
       });
+      this.engine = engine;
       const results = await engine.run(DEMO_JOBS, {
         float: DEMO_FLOAT,
         reserve: DEMO_RESERVE,
@@ -316,6 +375,9 @@ export class DemoSession {
         },
       });
       backend.close();
+      this.demo.bypassQuoteCheck = false;
+      // Batch over: revoke the mandate so nothing more can be paid under it.
+      await manager?.close();
 
       const summary = await this.summarize(results, ledger, airwallex, float, clearing, recorder, writer);
       this.emit({ kind: "run.finished", runId, summary });
@@ -329,7 +391,9 @@ export class DemoSession {
       }
     } catch (e) {
       backend.close();
-      this.emit({ kind: "run.failed", runId, error: String(e).replace(live?.rpcUrl ?? "\u0000", "<rpc>") });
+      this.demo.bypassQuoteCheck = false;
+      await manager?.close().catch((err) => ledger.log(null, "mandate.revoke_failed", { error: String(err) }));
+      this.emit({ kind: "run.failed", runId, error: String(e).replace(rpcUrl ?? "\u0000", "<rpc>") });
     }
   }
 
@@ -344,16 +408,21 @@ export class DemoSession {
   ): Promise<RunSummary> {
     const events = ledger.events();
     const live = this.opts.live;
-    const metal = float instanceof MockMetal ? float : undefined;
-    const payer = live ? (float as MetalFloatGateway).address : undefined;
+    const manager = float instanceof MandateManager ? float : undefined;
+    const metal =
+      float instanceof MockMetal ? float : manager?.gateway instanceof MockMandateGateway ? manager.gateway.metal : undefined;
+    const rpcUrl = live?.rpcUrl ?? this.opts.liveMandate?.rpcUrl;
+    // On chain, payments come from the agent wallet (x402) or the owner's account (mandate).
+    const payer = live ? (float as MetalFloatGateway).address : this.opts.liveMandate ? manager?.gateway.payer : undefined;
+    const isLive = Boolean(rpcUrl);
     // What the rail actually settled, per payment key: the mock's own record, or each tx re-read from chain.
     const settled: { key: string; payTo: string; amount: Micros }[] = [];
     const chainProblems: string[] = [];
     if (metal) {
       for (const s of metal.settlements.values()) settled.push(s);
-    } else if (live && payer) {
+    } else if (rpcUrl && payer) {
       const paid = ledger.payments().filter((p) => p.status === "paid");
-      const audited = await auditPaymentsOnChain(live.rpcUrl, payer, paid);
+      const audited = await auditPaymentsOnChain(rpcUrl, payer, paid);
       for (const a of audited) {
         if (!a.succeeded) chainProblems.push(`chain.not_settled: ${a.key} tx ${a.txHash || "(none)"}`);
         settled.push({ key: a.key, payTo: a.payTo, amount: a.amount });
@@ -379,7 +448,7 @@ export class DemoSession {
         holdOutcome: r.holdOutcome,
         premiumOnly: r.premiumOnlyCost,
         dropped: r.dropped,
-        receipt: receiptFor(r.jobId, ledger, events, recorder, live ? "live" : "simulated"),
+        receipt: receiptFor(r.jobId, ledger, events, recorder, isLive ? "live" : "simulated"),
         report: writer?.report(r.jobId) ?? [],
       };
     });
@@ -407,7 +476,18 @@ export class DemoSession {
       reconciled: perJobOk && totalOk && violations.length === 0,
       violations,
       llm: llm ? { calls: llm.calls, failures: llm.failures, tripped: llm.tripped } : null,
-      rail: live ? { source: "live", payer, network: "Metal testnet (eip155:63825)" } : { source: "simulated" },
+      rail: isLive ? { source: "live", payer, network: "Metal testnet (eip155:63825)" } : { source: "simulated" },
+      mandate: manager?.active
+        ? {
+            source: manager.source,
+            mandateId: manager.active.mandateId,
+            bindTx: manager.active.bindTx,
+            revokeTx: manager.active.revokeTx,
+            budget: manager.active.budget,
+            perPaymentCap: manager.active.perPaymentCap,
+            payees: manager.active.payees.length,
+          }
+        : null,
     };
   }
 }

@@ -7,6 +7,10 @@ import assert from "node:assert/strict";
 import { cents } from "../src/money.ts";
 import { InsufficientFloat, type FloatGateway, type HoldGateway } from "../src/payments/types.ts";
 import { MockMetal } from "../src/payments/mock-metal.ts";
+import { MockMandateGateway } from "../src/payments/mandate.ts";
+import { MandateManager } from "../src/payments/mandate-manager.ts";
+import { CATALOG } from "../src/policy/catalog.ts";
+import { DEFAULT_POLICY } from "../src/policy/types.ts";
 import { MetalFloatGateway } from "../src/payments/metal.ts";
 import { MockAirwallex } from "../src/payments/mock-airwallex.ts";
 import { AirwallexHoldGateway } from "../src/payments/airwallex.ts";
@@ -106,6 +110,7 @@ const liveMetal = process.env.METAL_PRIVATE_KEY && process.env.METAL_RPC_URL;
 const liveAirwallex = process.env.AIRWALLEX_CLIENT_ID && process.env.AIRWALLEX_API_KEY && process.env.AIRWALLEX_TEST_PAYMENT_METHOD;
 
 floatContract("MockMetal", () => new MockMetal(), false);
+floatContract("MandateManager (simulated mandate)", () => new MandateManager(new MockMandateGateway(), CATALOG, DEFAULT_POLICY.maxHold), false);
 floatContract("MetalFloatGateway (testnet)", () => MetalFloatGateway.fromEnv(), liveMetal ? false : "set METAL_PRIVATE_KEY and METAL_RPC_URL");
 
 holdContract("MockAirwallex", () => new MockAirwallex(), false);

@@ -1,132 +1,111 @@
 /**
- * Startup sweeper: closes orphaned holds left open by a previous server crash.
+ * Startup sweeper: closes card holds left open by a previous crash (invariant 3: every hold ends
+ * captured or cancelled, including for crashed jobs).
  *
- * The safety rule (invariant #3 in the project prompt):
- *   "Every hold ends captured or cancelled, including for failed and crashed jobs."
+ * For every hold the persistent ledger still shows as `authorized`:
+ *   1. Resolve its `pending` payments from the payment rail (lookup): settled → paid, not → failed.
+ *      If the rail cannot answer, leave the hold alone and report it: capturing before we know
+ *      what was paid could charge the customer less than the providers were paid, or more.
+ *   2. Capture exactly what was spent (floored to the cent, never above the authorization), or
+ *      cancel if nothing was spent. Transient errors are retried.
+ * Events go through Ledger, so a swept hold looks exactly like one the engine settled.
  *
- * When the server restarts after a crash, any hold still at status = 'authorized'
- * in SQLite is an orphan. The customer's card has money locked that may never be
- * released unless we clean it up.
+ * Holds must outlive the crashed process for this to mean anything: real Airwallex intents do;
+ * in-memory MockAirwallex holds do not (see src/server/main.ts).
  *
- * Logic per orphaned hold:
- *   - If the job has paid payments recorded in the ledger: capture exactly what was spent.
- *   - If nothing was spent: cancel the hold (releases the full amount to the customer).
- *   - Either way: update the hold status in the ledger store.
- *   - Log what happened so the dashboard and STATUS.md can reference it.
- *
- * The sweeper is called once at engine server startup, before accepting any requests.
+ * First version by Kavisha (dbe6432); this one resolves pending payments first.
  */
-import type { HoldGateway } from "../payments/types.ts";
-import type { LedgerStore } from "./ledger.ts";
+import type { FloatGateway, HoldGateway } from "../payments/types.ts";
 import { TransientError } from "../payments/types.ts";
 import { floorToCent } from "../money.ts";
+import { Ledger, type LedgerStore } from "./ledger.ts";
 
 export interface SweeperResult {
   swept: number;
   captured: number;
   cancelled: number;
+  skipped: number;
   errors: string[];
 }
 
-/**
- * Sweep all holds that are still `authorized` in the SQLite store.
- * @param store  The persistent ledger store (must be SqliteStore, not MemoryStore).
- * @param holds  The card hold gateway (MockAirwallex or AirwallexHoldGateway).
- * @param log    Optional logger (defaults to console.log).
- */
-export async function sweepOrphanedHolds(
-  store: LedgerStore,
-  holds: HoldGateway,
-  log: (msg: string) => void = console.log,
-): Promise<SweeperResult> {
-  const result: SweeperResult = { swept: 0, captured: 0, cancelled: 0, errors: [] };
+export async function sweepOrphanedHolds(opts: {
+  store: LedgerStore;
+  holds: HoldGateway;
+  /** The payment rail, to resolve payments a crash left pending. Without it such holds are skipped. */
+  float?: Pick<FloatGateway, "lookup">;
+  log?: (msg: string) => void;
+  retryDelayMs?: number;
+}): Promise<SweeperResult> {
+  const { store, holds, float } = opts;
+  const log = opts.log ?? console.log;
+  const ledger = new Ledger(store);
+  const result: SweeperResult = { swept: 0, captured: 0, cancelled: 0, skipped: 0, errors: [] };
 
-  // Find all holds that never reached 'captured' or 'cancelled'.
-  // listPayments and getHold are both available on LedgerStore.
-  const allPayments = store.listPayments();
-  const allEvents = store.listEvents();
-
-  // Collect jobIds with an 'authorized' hold.
-  // We iterate events to find hold.authorized events without a matching hold.captured/cancelled.
-  const holdAuthorized = new Set<string>();
-  const holdClosed = new Set<string>();
-
-  for (const ev of allEvents) {
-    if (!ev.jobId) continue;
-    if (ev.type === "hold.authorized") holdAuthorized.add(ev.jobId);
-    if (ev.type === "hold.captured" || ev.type === "hold.cancelled") holdClosed.add(ev.jobId);
-  }
-
-  const orphanJobIds = [...holdAuthorized].filter((id) => !holdClosed.has(id));
-  if (orphanJobIds.length === 0) {
-    log("[Sweeper] No orphaned holds found.");
+  const jobIds = new Set<string>();
+  for (const e of store.listEvents()) if (e.jobId && e.type === "hold.authorized") jobIds.add(e.jobId);
+  const orphans = [...jobIds].filter((id) => store.getHold(id)?.status === "authorized");
+  if (orphans.length === 0) {
+    log("[sweeper] no orphaned holds");
     return result;
   }
+  log(`[sweeper] ${orphans.length} orphaned hold(s) from a previous run`);
 
-  log(`[Sweeper] Found ${orphanJobIds.length} orphaned hold(s) from a prior session.`);
+  for (const jobId of orphans) {
+    const hold = store.getHold(jobId)!;
 
-  for (const jobId of orphanJobIds) {
-    result.swept++;
-    const holdRow = store.getHold(jobId);
-    if (!holdRow) {
-      result.errors.push(`${jobId}: hold row missing (data inconsistency)`);
+    // 1. What was actually paid? Pending rows are resolved from the rail, never guessed.
+    const pending = ledger.payments(jobId).filter((p) => p.status === "pending");
+    let unresolved = 0;
+    for (const p of pending) {
+      if (!float) {
+        unresolved++;
+        continue;
+      }
+      try {
+        const settled = await float.lookup(p.key);
+        if (settled) ledger.markPaid(p.key, settled.txHash);
+        else ledger.markFailed(p.key, "not settled (startup sweep)");
+      } catch (e) {
+        unresolved++;
+        log(`[sweeper] ${jobId}: could not resolve pending payment ${p.key}: ${String(e)}`);
+      }
+    }
+    if (unresolved > 0) {
+      result.skipped++;
+      result.errors.push(`${jobId}: ${unresolved} pending payment(s) unresolved; hold ${hold.holdId} left open for a later sweep`);
+      ledger.log(jobId, "hold.sweep_skipped", { holdId: hold.holdId, unresolved });
       continue;
     }
 
-    // Calculate what was actually paid for this job.
-    const jobPayments = allPayments.filter((p) => p.jobId === jobId && p.status === "paid");
-    const spent = jobPayments.reduce((s, p) => s + p.amount, 0);
-    const captureAmount = floorToCent(spent);
-
-    const maxRetries = 3;
-    let succeeded = false;
-
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    // 2. Capture what was spent, or cancel.
+    result.swept++;
+    const amount = Math.min(floorToCent(ledger.spent(jobId)), hold.authorized);
+    for (let attempt = 1; ; attempt++) {
       try {
-        if (captureAmount > 0) {
-          await holds.capture(holdRow.holdId, captureAmount);
-          store.upsertHold({ ...holdRow, captured: captureAmount, status: "captured" });
-          store.appendEvent({
-            at: Date.now(),
-            jobId,
-            type: "hold.captured",
-            data: { holdId: holdRow.holdId, captured: captureAmount, reason: "sweeper_on_restart" },
-          });
-          log(`[Sweeper] Job ${jobId}: captured ${captureAmount} micros (spent from ${jobPayments.length} payment(s)).`);
+        if (amount > 0) {
+          await holds.capture(hold.holdId, amount);
+          ledger.recordCapture(jobId, amount);
           result.captured++;
+          log(`[sweeper] ${jobId}: captured ${amount} micros`);
         } else {
-          await holds.cancel(holdRow.holdId, "job_crashed_before_any_spend");
-          store.upsertHold({ ...holdRow, captured: 0, status: "cancelled" });
-          store.appendEvent({
-            at: Date.now(),
-            jobId,
-            type: "hold.cancelled",
-            data: { holdId: holdRow.holdId, released: holdRow.authorized, reason: "sweeper_on_restart" },
-          });
-          log(`[Sweeper] Job ${jobId}: cancelled (nothing was spent).`);
+          await holds.cancel(hold.holdId, "job_crashed_before_any_spend");
+          ledger.recordCancel(jobId, "startup sweep: nothing spent");
           result.cancelled++;
+          log(`[sweeper] ${jobId}: cancelled, nothing spent`);
         }
-        succeeded = true;
         break;
       } catch (e) {
-        if (e instanceof TransientError && attempt < maxRetries) {
-          log(`[Sweeper] Job ${jobId}: attempt ${attempt} transient error, retrying... (${String(e)})`);
-          await new Promise((r) => setTimeout(r, 1000 * attempt));
-        } else {
-          const msg = `${jobId}: failed after ${attempt} attempt(s): ${String(e)}`;
-          result.errors.push(msg);
-          log(`[Sweeper] ERROR — ${msg}`);
-          break;
+        if (e instanceof TransientError && attempt < 3) {
+          await new Promise((r) => setTimeout(r, (opts.retryDelayMs ?? 1000) * attempt));
+          continue;
         }
+        result.errors.push(`${jobId}: ${String(e)}`);
+        ledger.log(jobId, "hold.sweep_failed", { holdId: hold.holdId, error: String(e) });
+        log(`[sweeper] ${jobId}: could not close hold ${hold.holdId}: ${String(e)}`);
+        break;
       }
     }
-
-    if (!succeeded) {
-      log(`[Sweeper] WARNING: Job ${jobId} hold ${holdRow.holdId} could not be closed. Manual action needed.`);
-    }
   }
-
-  log(`[Sweeper] Done. Swept: ${result.swept}, Captured: ${result.captured}, Cancelled: ${result.cancelled}, Errors: ${result.errors.length}`);
+  log(`[sweeper] done: ${result.captured} captured, ${result.cancelled} cancelled, ${result.skipped} skipped, ${result.errors.length} errors`);
   return result;
 }
-

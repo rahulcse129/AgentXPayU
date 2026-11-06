@@ -32,3 +32,9 @@ export class InsufficientFloat extends Error {}
 export class IssuerDeclined extends Error {}
 /** Something tried to break a hold rule (e.g. capture above the authorized amount). */
 export class HoldViolation extends Error {}
+/**
+ * The rail turned a payment down and nothing moved: an expired authorization, or a Metal
+ * mandate refusing the payee, the per-payment cap or the budget. The engine records the
+ * refusal, blocks the provider and buys elsewhere; it does not retry.
+ */
+export class PaymentRefused extends Error {}

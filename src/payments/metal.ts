@@ -32,7 +32,7 @@ import { HTTPFacilitatorClient } from "@x402/core/server";
 import { FacilitatorTimeoutError } from "@x402/core/server";
 import { METAL_NETWORKS, USDZ } from "@metalntwx/metal-pay";
 import type { Micros } from "../money.ts";
-import { InsufficientFloat, TransientError, type FloatGateway } from "./types.ts";
+import { InsufficientFloat, PaymentRefused, TransientError, type FloatGateway } from "./types.ts";
 
 export const METAL_TESTNET = "eip155:63825";
 export const METAL_TESTNET_CHAIN_ID = 63825;
@@ -307,8 +307,8 @@ export class MetalFloatGateway implements FloatGateway {
   }
 }
 
-/** The facilitator turned the payment down for a reason that moved nothing (expired window, bad signature...). */
-export class PaymentRefused extends Error {}
+
+export { PaymentRefused };
 
 function isNetworkError(e: unknown): boolean {
   return e instanceof TypeError || /fetch failed|ECONN|ETIMEDOUT|socket|network/i.test(String(e));

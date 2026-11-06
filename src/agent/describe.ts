@@ -5,6 +5,8 @@
 import { fmt } from "../money.ts";
 import type { LedgerEvent } from "../ledger/ledger.ts";
 
+const sim = (d: Record<string, unknown>) => (d.source === "simulated" ? "[SIMULATED] " : "");
+
 export function describe(e: LedgerEvent): string | null {
   const d = e.data;
   const j = e.jobId ? `[${e.jobId}]` : "[*]";
@@ -14,6 +16,13 @@ export function describe(e: LedgerEvent): string | null {
     case "fault.step_changed": return `${j} ⚠ step ${d.stepId} grew to ${d.units} paragraphs (prompt overrun)`;
     case "fault.provider_slowed": return `${j} ⚠ ${d.providerId} slows to ~${(Number(d.latencyMs) / 1000).toFixed(1)}s under load`;
     case "fault.rogue_mode": return `${j} ⚠ demo control: ${d.providerId} now behaves "${d.mode}"`;
+    case "fault.mandate_test": return `${j} ⚠ deliberate test: our quote check is OFF; ${d.providerId} will ask to be paid at an unregistered address`;
+    case "demo.quote_check_skipped": return `${j} ⚠ quote check skipped for ${d.providerId} (test): ${d.why}`;
+    case "demo.quote_check_restored": return `${j} ✓ our quote check is back on`;
+    case "mandate.opened": return `${j} ${sim(d)}🔒 Metal mandate bound: ${d.payees} registered payees, ${fmt(Number(d.perPaymentCap))} per payment, ${fmt(Number(d.budget))} budget`;
+    case "mandate.raised": return `${j} ${sim(d)}🔒 mandate budget raised ${fmt(Number(d.from))} → ${fmt(Number(d.to))} (${d.why})`;
+    case "mandate.revoked": return `${j} ${sim(d)}🔒 mandate revoked: nothing more can be paid under it`;
+    case "mandate.refused": return `${j} ${sim(d)}🔒 Metal mandate refused ${fmt(Number(d.amount))} to ${d.payTo}: ${d.why}`;
     case "agent.decision": return `${j} ${d.stepId}: buy from ${d.providerId} for ${fmt(Number(d.cost))} — ${d.why}`;
     case "payment.refused": return `${j} ✋ refused ${d.providerId}: ${d.reason}`;
     case "provider.blocked": return `${j} ⛔ ${d.providerId} blocked (${d.why})`;
@@ -57,4 +66,5 @@ export const DECISION_EVENTS: ReadonlySet<string> = new Set([
   "hold.increase_requested",
   "job.degraded",
   "step.dropped",
+  "mandate.refused",
 ]);

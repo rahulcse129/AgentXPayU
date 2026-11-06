@@ -28,6 +28,8 @@ Press **Run scripted demo** and answer the hold-increase prompts (approve B, dec
 
 **With real Metal testnet payments:** run `npm run engine:live` instead of `engine:offline`. The header shows MODE: MIXED, the Metal rail LIVE, and every receipt links its transaction on the testnet explorer. A scripted run spends about 1.4 testnet USDZ. It needs `METAL_PRIVATE_KEY`, `METAL_RPC_URL` and a synced clock; add the LLM with `npm run engine -- --live-metal`.
 
+**Two locks on every payment.** Our policy check (`verifyQuote`), then a Metal mandate the payment goes through: payee allowlist, per-payment cap, budget. Offline the mandate is SIMULATED. `npm run engine:live-mandate` uses a real one on the owner's MetalAccount (needs `METAL_OWNER_ACCOUNT` and `METAL_OWNER_KEY_FILE`). The **Disable our quote check (mandate test)** button turns our check off for one attempt, so you can watch the mandate refuse the rogue on its own.
+
 In Claude Code, `.claude/launch.json` defines `engine` (offline), `engine-live` and `dashboard` for the in-app browser preview when the session is opened in this folder.
 
 ### Live on Metal testnet
@@ -63,7 +65,7 @@ flowchart LR
 |---|---|---|
 | Airwallex holds | mock (sandbox blocked: Payments not available in the team's region) | sandbox (LIVE) |
 | Metal x402 payments | **LIVE on testnet** in `npm run live:x402`; mock in demo and dashboard | testnet (LIVE) everywhere |
-| Metal mandates | — | testnet (LIVE) |
+| Metal mandates | **SIMULATED** in front of every payment; live code ready (`engine:live-mandate`), not yet run on chain | testnet (LIVE) |
 | Metal clearing | **SIMULATED** | stays SIMULATED until Metal opens testnet clearing |
 
 ## Guardrails, in code

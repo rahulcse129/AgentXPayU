@@ -51,7 +51,7 @@ test("a scripted dashboard run hits every beat and reconciles four ways", { time
       [
         ["Airwallex holds", "simulated"],
         ["Metal x402 payments", "simulated"],
-        ["Metal mandates", "not built"],
+        ["Metal mandates", "simulated"],
         ["Metal clearing", "simulated"],
         ["LLM (judge, feed, report)", "off"],
       ],
@@ -61,12 +61,9 @@ test("a scripted dashboard run hits every beat and reconciles four ways", { time
       // Beat 4: B's customer approves. Beat 5: a second customer declines.
       if (m.kind === "approval.requested") await post(m.jobId === "B" ? "/api/approve" : "/api/decline", { jobId: m.jobId });
     });
-    const [started, duplicate] = await Promise.all([
-      post("/api/run", { scripted: true }),
-      post("/api/run", { scripted: true }),
-    ]);
-    assert.equal(started.status, 202);
-    assert.equal(duplicate.status, 409, "one run at a time");
+    // Two starts at once: exactly one wins, whichever the server sees first.
+    const statuses = (await Promise.all([post("/api/run", { scripted: true }), post("/api/run", { scripted: true })])).map((r) => r.status).sort();
+    assert.deepEqual(statuses, [202, 409], "one run at a time");
 
     const seen = await done;
     const events = seen.flatMap((m) => (m.kind === "event" ? [m.event] : []));
@@ -102,17 +99,65 @@ test("a scripted dashboard run hits every beat and reconciles four ways", { time
     assert.equal(c.holdFinal, c.holdInitial, "C declined: hold unchanged");
     assert.equal(c.status, "budget_limited");
     assert.ok(s.jobs.some((j) => j.receipt.some((r) => r.status === "refused" && r.providerId === "model-bargain")));
+
+    // The batch paid through a (simulated) mandate: opened before any payment, revoked at the end.
+    assert.equal(s.mandate?.source, "simulated");
+    assert.ok(s.mandate?.revokeTx !== null, "mandate revoked at batch end");
+    const opened = events.findIndex((e) => e.type === "mandate.opened");
+    const firstPaid = events.findIndex((e) => e.type === "payment.paid");
+    const revoked = events.findIndex((e) => e.type === "mandate.revoked");
+    assert.ok(opened >= 0 && opened < firstPaid && firstPaid < revoked, "open → pay → revoke");
+    // B's approved increase raised the mandate budget after the Airwallex increment.
+    const incremented = events.findIndex((e) => e.type === "hold.incremented" && e.jobId === "B");
+    const raised = events.findIndex((e) => e.type === "mandate.raised");
+    assert.ok(raised > incremented && incremented > 0, "mandate raised only after the hold increment");
   } finally {
     server.close();
   }
 });
 
-test("controls: mandate test is honestly unavailable; others need a run; approvals need a pending request", async () => {
+test("mandate test: with our quote check off, the mandate still refuses the rogue's unregistered payee", { timeout: 30_000 }, async () => {
+  const { server, base, post } = await engine();
+  try {
+    let pressed = false;
+    const done = follow(base, async (m) => {
+      if (m.kind === "approval.requested") await post("/api/decline", { jobId: m.jobId });
+      // Press the button right after the rogue is first blocked (for overquoting); tier-2 model steps remain.
+      if (!pressed && m.kind === "event" && m.event.type === "provider.blocked" && m.event.data.providerId === "model-bargain") {
+        pressed = true;
+        const r = await post("/api/control", { action: "mandate_test" });
+        assert.equal(r.status, 200);
+      }
+    });
+    assert.equal((await post("/api/run", { scripted: true })).status, 202);
+    const seen = await done;
+    const events = seen.flatMap((m) => (m.kind === "event" ? [m.event] : []));
+    const at = (t: string) => events.findIndex((e) => e.type === t);
+
+    assert.ok(at("fault.mandate_test") >= 0, "button pressed");
+    const skipped = events.find((e) => e.type === "demo.quote_check_skipped" && e.data.providerId === "model-bargain");
+    assert.ok(skipped, "our check was really skipped for the rogue");
+    assert.match(String(skipped.data.why), /would have refused/);
+    const refusal = events.find((e) => e.type === "mandate.refused");
+    assert.ok(refusal, "the mandate refused");
+    assert.match(String(refusal.data.why), /not on the mandate's payee list/);
+    assert.ok(at("demo.quote_check_restored") > at("mandate.refused"), "our check comes back on");
+    assert.ok(events.some((e) => e.type === "provider.blocked" && /rail refused/.test(String(e.data.why))));
+
+    const s = (seen.find((m) => m.kind === "run.finished") as { summary: RunSummary }).summary;
+    assert.deepEqual(s.violations, [], "no money reached the unregistered address");
+    assert.equal(s.reconciled, true);
+    const rogueRow = s.jobs.flatMap((j) => j.receipt).find((r) => r.status === "refused" && /rail refused/.test(r.why ?? ""));
+    assert.ok(rogueRow, "receipt shows the mandate refusal");
+  } finally {
+    server.close();
+  }
+});
+
+test("controls: buttons need a run; approvals need a pending request", async () => {
   const { server, post } = await engine();
   try {
-    const mandate = await post("/api/control", { action: "mandate_test" });
-    assert.equal(mandate.status, 501);
-    assert.match(((await mandate.json()) as { message: string }).message, /not built/);
+    assert.equal((await post("/api/control", { action: "mandate_test" })).status, 409);
     assert.equal((await post("/api/control", { action: "slow_lite" })).status, 409);
     assert.equal((await post("/api/control", { action: "drop_tables" })).status, 400);
     assert.equal((await post("/api/approve", { jobId: "B" })).status, 404);
