@@ -7,6 +7,38 @@ function SourceBadge({ source }: { source: "live" | "simulated" }) {
   return source === "live" ? <span className="badge badge-live">LIVE</span> : <span className="badge badge-simulated">SIM</span>;
 }
 
+const EXPLORER = "https://testnet.metalntwx.com/tx/";
+const TxLink = ({ label, hash }: { label: string; hash?: string | null }) =>
+  hash && /^0x[0-9a-fA-F]{64}$/.test(hash) ? (
+    <a href={`${EXPLORER}${hash}`} target="_blank" rel="noopener noreferrer">
+      {label} {short(hash)} ↗
+    </a>
+  ) : null;
+
+/** Both locks every payment passed: our policy check, then the Metal mandate it was paid through. */
+function Locks({ summary }: { summary: RunSummary }) {
+  const m = summary.mandate;
+  return (
+    <div className="locks" aria-label="Payment locks">
+      <span className="lock">
+        <span className="good">✓</span> Policy check <span className="muted small">(price list + registered payee, every 402)</span>
+      </span>
+      <span className="lock-sep">·</span>
+      {m ? (
+        <span className="lock">
+          <span className="good">✓</span> Metal mandate <SourceBadge source={m.source} />{" "}
+          <span className="muted small">
+            {m.payees} payees · cap {fmt(m.perPaymentCap)} · budget {fmt(m.budget)}
+          </span>{" "}
+          <TxLink label="bind" hash={m.bindTx} /> <TxLink label="revoke" hash={m.revokeTx} />
+        </span>
+      ) : (
+        <span className="lock muted">Metal mandate: not used in this mode (x402 from the agent wallet)</span>
+      )}
+    </div>
+  );
+}
+
 export function Reconciliation({ summary }: { summary: RunSummary }) {
   const rows = [...summary.jobs.map((j) => ({ id: `Job ${j.jobId}`, ...j })), { id: "Total", ...summary.totals }];
   return (
@@ -17,6 +49,7 @@ export function Reconciliation({ summary }: { summary: RunSummary }) {
           {summary.reconciled ? "✓ Every dollar accounted for" : "✗ Mismatch"}
         </span>
       </div>
+      <Locks summary={summary} />
       <div className="table-wrap">
       <table>
         <thead>

@@ -5,7 +5,7 @@ import { CATALOG } from "../src/policy/catalog.ts";
 import { DEFAULT_POLICY } from "../src/policy/types.ts";
 import { Ledger, MemoryStore } from "../src/ledger/ledger.ts";
 import { InsufficientFloat, PaymentRefused } from "../src/payments/types.ts";
-import { MandateRefused, MockMandateGateway, parseCliOutput } from "../src/payments/mandate.ts";
+import { MandateRefused, MockMandateGateway, parseCliOutput, txOf } from "../src/payments/mandate.ts";
 import { MandateManager } from "../src/payments/mandate-manager.ts";
 import { toUsdzCents } from "../src/payments/mandate-money.ts";
 
@@ -46,6 +46,14 @@ test("metal-agent's key-value output parses, as printed by `mandate credential c
   assert.equal(kv.get("mandate"), "0x81d9a0c8d6239cda0e95fe9a0825e5334cd2e2266285895225f96bf858d21fe9");
   assert.equal(kv.get("payee"), "0x11111111111111111111111111111111111111A1 model-lite", "first value kept");
   assert.equal(kv.get("mandate-key-file"), "C:/tmp/m1.key.json (created)");
+});
+
+test("a transaction hash is taken only when the CLI printed a whole one", () => {
+  const h = `0x${"ab".repeat(32)}`;
+  assert.equal(txOf(parseCliOutput(`outcome paid\ntransaction ${h}`), ""), h);
+  // After a revoke, recording a refusal printed a bare "0x" (seen live 2026-11-06): no hash.
+  assert.equal(txOf(parseCliOutput("outcome refused, not sent\ntransaction 0x"), "outcome refused, not sent\ntransaction 0x"), "");
+  assert.equal(txOf(parseCliOutput("outcome refused, not sent\nrecorded no"), "outcome refused, not sent\nrecorded no"), "");
 });
 
 // ---------------------------------------------------------------- the mandate's rules

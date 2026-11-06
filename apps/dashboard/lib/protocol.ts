@@ -60,6 +60,8 @@ export interface RunSummary {
   violations: string[];
   llm: { calls: number; failures: number; tripped: string | null } | null;
   rail: { source: "live" | "simulated"; payer?: string; network?: string };
+  /** The Metal mandate the batch paid through (the second lock), if any. */
+  mandate: { source: "live" | "simulated"; mandateId: string; bindTx: string; revokeTx: string | null; budget: Micros; perPaymentCap: Micros; payees: number } | null;
 }
 
 export interface JobPlan {

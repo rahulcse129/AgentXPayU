@@ -39,6 +39,7 @@ Needs `METAL_PRIVATE_KEY` (funded with testnet USDZ) and `METAL_RPC_URL` in `.en
 ```bash
 npm run live:x402     # one job, real x402 payments, every tx re-read from chain; spends at most 0.25 USDZ
 npm run test:live     # adapter contract tests against the real gateway (~0.03 USDZ)
+npm run live:mandate  # Metal mandate lifecycle on chain: bind, pay, refusals recorded on chain, raise, revoke
 ```
 
 Node ≥ 22.13. Live mode needs the variables in [.env.example](.env.example).
@@ -65,7 +66,7 @@ flowchart LR
 |---|---|---|
 | Airwallex holds | mock (sandbox blocked: Payments not available in the team's region) | sandbox (LIVE) |
 | Metal x402 payments | **LIVE on testnet** in `npm run live:x402`; mock in demo and dashboard | testnet (LIVE) everywhere |
-| Metal mandates | **SIMULATED** in front of every payment; live code ready (`engine:live-mandate`), not yet run on chain | testnet (LIVE) |
+| Metal mandates | **LIVE on testnet** via `engine:live-mandate` and `live:mandate` (refusals recorded on chain); SIMULATED offline | testnet (LIVE) |
 | Metal clearing | **SIMULATED** | stays SIMULATED until Metal opens testnet clearing |
 
 ## Guardrails, in code

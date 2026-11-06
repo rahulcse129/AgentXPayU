@@ -52,7 +52,17 @@ export interface MandateInfo {
 }
 
 /** The mandate refused the payment; nothing moved. */
-export class MandateRefused extends PaymentRefused {}
+export class MandateRefused extends PaymentRefused {
+  constructor(
+    message: string,
+    /** Metal's reason code, e.g. payee_not_allowed (live only). */
+    readonly reason?: string,
+    /** The on-chain record of the refusal, when it was recorded (`--record-refusal`). */
+    readonly refusalTx?: string,
+  ) {
+    super(message);
+  }
+}
 
 export interface MandateGateway {
   readonly source: "live" | "simulated";
@@ -147,6 +157,11 @@ export interface MetalMandateConfig {
   rpcUrl: string;
   /** Where credentials and the mandate key live. Holds a private key: keep it outside the repo. */
   workDir: string;
+  /**
+   * Record each refusal on chain (`--record-refusal`, gas from the owner key), so "the mandate
+   * refused" is a transaction anyone can check. Refusals are rare: the rogue, the mandate test.
+   */
+  recordRefusals?: boolean;
 }
 
 const require = createRequire(import.meta.url);
@@ -162,8 +177,11 @@ export function parseCliOutput(out: string): Map<string, string> {
   return m;
 }
 
-const txOf = (kv: Map<string, string>, out: string): string =>
-  (kv.get("transaction") ?? kv.get("tx") ?? out.match(/0x[0-9a-fA-F]{64}/)?.[0] ?? "").split(/\s/)[0]!;
+/** The transaction hash a command printed, or "" when there is none (never a partial value). */
+export function txOf(kv: Map<string, string>, out: string): string {
+  const isHash = (s?: string) => (s && /^0x[0-9a-fA-F]{64}$/.test(s) ? s : undefined);
+  return isHash(kv.get("transaction")?.split(/\s/)[0]) ?? isHash(kv.get("tx")?.split(/\s/)[0]) ?? out.match(/0x[0-9a-fA-F]{64}/)?.[0] ?? "";
+}
 
 export class MetalMandateGateway implements MandateGateway {
   readonly source = "live" as const;
@@ -191,7 +209,13 @@ export class MetalMandateGateway implements MandateGateway {
       throw new Error("live mandates need METAL_OWNER_ACCOUNT, METAL_OWNER_KEY_FILE and METAL_RPC_URL (see `metal-agent account create`)");
     }
     const home = env.USERPROFILE ?? env.HOME ?? ".";
-    return new MetalMandateGateway({ principal, ownerKeyFile, rpcUrl, workDir: env.METAL_MANDATE_DIR?.trim() || join(home, ".metal-agent", "margin-mandates") });
+    return new MetalMandateGateway({
+      principal,
+      ownerKeyFile,
+      rpcUrl,
+      workDir: env.METAL_MANDATE_DIR?.trim() || join(home, ".metal-agent", "margin-mandates"),
+      recordRefusals: env.METAL_RECORD_REFUSALS !== "0",
+    });
   }
 
   private run(args: string[]): Promise<{ code: number; out: string; kv: Map<string, string> }> {
@@ -274,14 +298,29 @@ export class MetalMandateGateway implements MandateGateway {
     if (!this.credential) throw new MandateRefused("Metal mandate: none open");
     const amount = toUsdzCents(req.amount);
     this.asked.set(req.paymentId, { payTo: req.payTo, amount: req.amount });
-    const r = await this.run([
+    const args = [
       "mandate", "pull", "--credential", this.credential, "--to", req.payTo, "--amount", amount,
       "--payment-id", req.paymentId, "--mandate-key-file", this.mandateKeyFile,
-    ]);
+    ];
+    const r = await this.run(args);
     // Exit codes from `metal-agent mandate pull --help`: 0 paid, 1 refused or error, 3 pending, 4 held in the payee's escrow.
     if (r.code === 0 || r.code === 4) return { txHash: txOf(r.kv, r.out) };
     if (r.code === 3) throw new TransientError(`mandate pull pending: ${r.out.trim().slice(0, 200)}`);
-    if (/refus/i.test(r.out)) throw new MandateRefused(`Metal mandate refused on chain: ${r.out.trim().slice(0, 300)}`);
+    if (r.kv.get("outcome")?.startsWith("refused")) {
+      // e.g. "reason payee_not_allowed (...)": Metal checked the payout against the account's mandate.
+      const reason = r.kv.get("reason") ?? "refused";
+      const code = reason.split(" ")[0]!;
+      let refusalTx = "";
+      if (this.cfg.recordRefusals) {
+        const rec = await this.run([...args, "--key", this.cfg.ownerKeyFile, "--record-refusal"]);
+        refusalTx = txOf(rec.kv, rec.out);
+      }
+      throw new MandateRefused(
+        `Metal mandate refused: ${reason}${refusalTx ? `; refusal recorded on chain ${refusalTx}` : "; not sent"}`,
+        code,
+        refusalTx || undefined,
+      );
+    }
     // Any other failure may or may not have reached the chain; the same payment id pays at most once.
     throw new TransientError(`mandate pull failed: ${r.out.trim().slice(0, 300)}`);
   }

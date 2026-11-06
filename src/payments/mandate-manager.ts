@@ -87,7 +87,16 @@ export class MandateManager implements FloatGateway {
       return { txHash };
     } catch (e) {
       if (e instanceof MandateRefused) {
-        this.ledger?.log(null, "mandate.refused", { key, payTo, amount, why: e.message, mandateId: this.mandate?.mandateId, source: this.source });
+        this.ledger?.log(null, "mandate.refused", {
+          key,
+          payTo,
+          amount,
+          why: e.message,
+          reason: e.reason,
+          refusalTx: e.refusalTx,
+          mandateId: this.mandate?.mandateId,
+          source: this.source,
+        });
       }
       throw e;
     }
