@@ -80,7 +80,14 @@ First version by Kavisha (`dbe6432`, Nov 6): mandate interface, simulated gatewa
 - If the rail can't answer, it leaves the hold open and reports it. It never captures a guess.
 - Then it captures what was spent (floored to the cent), or cancels, retrying transient errors. Events go through `Ledger`, the same as the engine's.
 - `test/sweeper.test.ts` simulates crashes with SQLite plus surviving holds and rail: capture/cancel, settled vs unsettled pending payments, unresolved-pending skip, idempotent re-sweep, transient vs permanent capture errors.
-- **Not wired into the dashboard yet.** With `--live-airwallex` the holds are real and outlive the process, but the session ledger is in memory, so after a crash there's no record to sweep against. The engine prints a warning at startup. **To do:** persist the session ledger in SQLite and run the sweeper on start.
+- **Wired into the dashboard for live cards (2026-11-09).** With `--live-airwallex`, each run's ledger is a SQLite file, `data/ledgers/<runTag>.db` (`MARGIN_LEDGER_DIR` to move it). On startup the engine sweeps every file before it takes requests (`src/server/recover.ts`). The run's first ledger event records which rail paid, because that decides how pending payments are resolved:
+  - **simulated:** the dead mock rail moved no real money, so nothing pending settled.
+  - **x402:** the chain answers, through the deterministic nonce.
+  - **mandate:** the CLI can only be re-asked by the process that asked first, so the hold is **left open and reported**, never guessed.
+- **Verified live:** a run was killed with job A's $1.00 hold authorized (`int_sgpvtdh4nhnz9e0idmc`, `REQUIRES_CAPTURE`). On restart, the sweeper cancelled it ("nothing spent"), and Airwallex shows it `CANCELLED`. `test/recover.test.ts` covers capture, cancel, each rail's pending case, and a second sweep that does nothing.
+- **Not covered:**
+  - **Card forms never filled.** Intents created for customers who hadn't entered a card yet stay `REQUIRES_PAYMENT_METHOD`. No money is held on them.
+  - **Mandates.** A mandate bound by a crashed `--live-mandate` run isn't revoked on restart.
 
 ### Live on testnet, 2026-11-06
 
@@ -231,4 +238,4 @@ Result of `npm run sim` (10,000 runs): **0 violations**. 143,996 running totals 
 
 - One clearing deposit per job is sized to the hold, not to the job's share of the float. In the emulator that is harmless. With live clearing, it would lock the full hold per job until the epoch closes.
 - Epochs advance by engine rounds, not wall-clock time.
-- A hold whose capture was deferred by the finality gate is left for the startup sweeper (`src/ledger/sweeper.ts`). That only applies where holds outlive the process (real Airwallex). The dashboard's live-card mode keeps its ledger in memory, so it can't sweep yet (see Sweeper).
+- A hold whose capture was deferred by the finality gate is left for the startup sweeper (`src/ledger/sweeper.ts`). That only applies where holds outlive the process (real Airwallex). The dashboard's live-card mode persists each run's ledger and sweeps it on startup (see Sweeper).

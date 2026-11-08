@@ -14,7 +14,8 @@
  */
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { Ledger, MemoryStore, type LedgerEvent } from "../ledger/ledger.ts";
+import { Ledger, MemoryStore, type LedgerEvent, type LedgerStore } from "../ledger/ledger.ts";
+import { openRunLedger, RUN_RAILS_EVENT, type PaymentRail } from "./recover.ts";
 import { CATALOG, ROGUE_PROVIDER_ID, providerById } from "../policy/catalog.ts";
 import { DEFAULT_POLICY } from "../policy/types.ts";
 import type { Micros } from "../money.ts";
@@ -118,6 +119,11 @@ export interface LiveAirwallex {
   makeApi: (runTag: string) => AirwallexHoldGateway;
   /** How long to wait for a customer to enter their card (default 5 minutes). */
   cardTimeoutMs?: number;
+  /**
+   * Where each run's ledger is kept (`<dir>/<runTag>.db`). Real holds outlive the process, so the
+   * ledger must too: the engine sweeps these files on startup (src/server/recover.ts).
+   */
+  ledgerDir?: string;
 }
 
 /** Airwallex amounts are decimal major units; holds are whole cents. */
@@ -198,6 +204,7 @@ export class DemoSession {
   private approvals: PendingApprovals | null = null;
   private providers: ProviderBackend | null = null;
   private ledger: Ledger | null = null;
+  private ledgerStore: { close(): void } | null = null;
   private pendingOverrun = false;
   private mandateManager: MandateManager | null = null;
   private engine: Orchestrator | null = null;
@@ -314,7 +321,17 @@ export class DemoSession {
   private async run(runId: number, scripted: boolean) {
     const rng = seeded(42);
     this.demo.bypassQuoteCheck = false;
-    const ledger: Ledger = new Ledger(new MemoryStore(), Date.now, (event) => {
+    const liveCards = this.opts.liveAirwallex;
+    const runTag = `r${Date.now().toString(36)}`;
+    this.ledgerStore?.close();
+    this.ledgerStore = null;
+    let store: LedgerStore = new MemoryStore();
+    if (liveCards?.ledgerDir) {
+      const sqlite = openRunLedger(liveCards.ledgerDir, runTag);
+      this.ledgerStore = sqlite;
+      store = sqlite;
+    }
+    const ledger: Ledger = new Ledger(store, Date.now, (event) => {
       this.emit({ kind: "event", runId, event, fact: describe(event), policy: policyReason(event) });
       // The mandate test is over once the mandate has refused a payment: our own check comes back on.
       if (event.type === "mandate.refused" && this.demo.bypassQuoteCheck) {
@@ -323,10 +340,9 @@ export class DemoSession {
       }
     });
     // Card holds: simulated, or real PaymentIntents the customer confirms in Drop-in on the dashboard.
-    const liveCards = this.opts.liveAirwallex;
     const airwallex: MockAirwallex | BrowserConfirmedHolds = liveCards
       ? new BrowserConfirmedHolds(
-          liveCards.makeApi(`r${Date.now().toString(36)}`),
+          liveCards.makeApi(runTag),
           (req) =>
             this.emit({
               kind: "card.required",
@@ -365,6 +381,9 @@ export class DemoSession {
       this.emit({ kind: "run.failed", runId, error: `live rail not ready: ${String(e).replace(rpcUrl ?? "\u0000", "<rpc>")}` });
       return;
     }
+    // First record: which rail pays, so a sweep after a crash knows how to resolve pending payments.
+    const paymentRail: PaymentRail = live ? "x402" : liveMandate ? "mandate" : "simulated";
+    ledger.log(null, RUN_RAILS_EVENT, { runTag, holds: liveCards ? "airwallex" : "simulated", payments: paymentRail });
     manager?.attach(ledger);
     this.mandateManager = manager;
     if (scripted) await backend.control(ROGUE_PROVIDER_ID, { mode: "overquote", overquoteFactor: 3 });

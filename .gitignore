@@ -10,3 +10,4 @@ demo-events.json
 demo-report.md
 next-env.d.ts
 *.tsbuildinfo
+data/

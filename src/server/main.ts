@@ -23,6 +23,7 @@ import { llmFromEnv, llmProviderFromEnv } from "../agent/llm-config.ts";
 import { MetalFloatGateway } from "../payments/metal.ts";
 import { MetalMandateGateway } from "../payments/mandate.ts";
 import { AirwallexHoldGateway } from "../payments/airwallex.ts";
+import { sweepRunLedgers } from "./recover.ts";
 import { DemoSession, type ControlAction, type LiveAirwallex, type LiveMandate, type LiveMetal, type SessionMessage } from "./session.ts";
 
 export interface RailStatus {
@@ -72,6 +73,9 @@ function send(res: ServerResponse, status: number, data: unknown) {
   res.end(JSON.stringify(data));
 }
 
+/** Where live-card runs keep their ledgers (one SQLite file per run). */
+export const ledgerDirOf = (env: NodeJS.ProcessEnv) => env.MARGIN_LEDGER_DIR?.trim() || "data/ledgers";
+
 export function createEngineServer(
   env: NodeJS.ProcessEnv = process.env,
   opts: { noLlm?: boolean; liveMetal?: boolean; liveMandate?: boolean; liveAirwallex?: boolean } = {},
@@ -95,7 +99,7 @@ export function createEngineServer(
   let liveAirwallex: LiveAirwallex | undefined;
   if (opts.liveAirwallex) {
     if (!env.AIRWALLEX_CLIENT_ID || !env.AIRWALLEX_API_KEY) throw new Error("--live-airwallex needs AIRWALLEX_CLIENT_ID and AIRWALLEX_API_KEY in .env");
-    liveAirwallex = { makeApi: (runTag) => AirwallexHoldGateway.fromEnv(env, runTag) };
+    liveAirwallex = { makeApi: (runTag) => AirwallexHoldGateway.fromEnv(env, runTag), ledgerDir: ledgerDirOf(env) };
   }
   const session = new DemoSession({
     llm,
@@ -187,14 +191,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const liveAirwallex = process.argv.includes("--live-airwallex");
   const { server } = createEngineServer(process.env, { noLlm: process.argv.includes("--no-llm"), liveMetal, liveMandate, liveAirwallex });
 
-  // Startup sweeper (src/ledger/sweeper.ts) needs holds that outlive this process. Dashboard card
-  // holds are MockAirwallex, in memory: after a crash there is nothing left to capture or cancel,
-  // so sweeping them would be pretend. It runs where holds are real (AirwallexHoldGateway).
-  console.log(
-    liveAirwallex
-      ? "[sweeper] idle: WARNING the session ledger is in memory, so Airwallex holds left open by a crash are not swept on restart; check the Airwallex dashboard"
-      : "[sweeper] idle: card holds are simulated in memory and do not survive a restart (runs with real Airwallex holds)",
-  );
+  // Startup sweeper: real Airwallex holds outlive a crash, so each live-card run's ledger is a
+  // SQLite file, and every file is swept before we take requests (src/server/recover.ts). Simulated
+  // holds die with the process, so there is nothing to sweep for them.
+  if (liveAirwallex) {
+    const dir = ledgerDirOf(process.env);
+    const x402Lookup = process.env.METAL_PRIVATE_KEY && process.env.METAL_RPC_URL ? MetalFloatGateway.fromEnv(process.env) : undefined;
+    const r = await sweepRunLedgers({ dir, holds: AirwallexHoldGateway.fromEnv(process.env), x402Lookup });
+    console.log(`[sweeper] ${r.files} run ledger(s) in ${dir}: ${r.captured} captured, ${r.cancelled} cancelled, ${r.skipped} left open`);
+    for (const e of r.errors) console.log(`[sweeper] NEEDS ATTENTION: ${e}`);
+  } else {
+    console.log("[sweeper] idle: card holds are simulated in memory and do not survive a restart (runs with real Airwallex holds)");
+  }
 
   const rail = liveMandate ? "LIVE through a Metal mandate" : liveMetal ? "LIVE x402 (testnet)" : "SIMULATED (simulated mandate in front)";
   const cards = liveAirwallex ? "LIVE (Airwallex sandbox, card entered in Drop-in)" : "SIMULATED";
