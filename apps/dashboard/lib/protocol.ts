@@ -47,6 +47,8 @@ export interface JobSummary {
   captured: Micros;
   released: Micros;
   holdOutcome: "captured" | "cancelled" | "none";
+  /** The card hold id: an Airwallex PaymentIntent (int_…) when live. */
+  holdId?: string;
   premiumOnly: Micros;
   dropped: string[];
   receipt: ReceiptRow[];
@@ -60,6 +62,8 @@ export interface RunSummary {
   violations: string[];
   llm: { calls: number; failures: number; tripped: string | null } | null;
   rail: { source: "live" | "simulated"; payer?: string; network?: string };
+  /** Card holds: simulated, or Airwallex PaymentIntents read back from Airwallex. */
+  holds: { source: "live" | "simulated" };
   /** The Metal mandate the batch paid through (the second lock), if any. */
   mandate: { source: "live" | "simulated"; mandateId: string; bindTx: string; revokeTx: string | null; budget: Micros; perPaymentCap: Micros; payees: number } | null;
 }
@@ -75,6 +79,7 @@ export interface JobPlan {
 export type SessionMessage =
   | { kind: "run.started"; runId: number; scripted: boolean; float: Micros; reserve: Micros; jobs: JobPlan[] }
   | { kind: "event"; runId: number; event: LedgerEvent; fact: string | null; policy: string | null }
+  | { kind: "card.required"; runId: number; jobId: string; customer: string; amount: Micros; currency: string; holdId: string; clientSecret: string; deadline: number }
   | { kind: "approval.requested"; runId: number; jobId: string; customer: string; current: Micros; newTotal: Micros; reason: string; deadline: number }
   | { kind: "feed.phrased"; runId: number; lines: Record<number, string> }
   | { kind: "run.finished"; runId: number; summary: RunSummary }

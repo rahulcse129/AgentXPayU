@@ -1,19 +1,19 @@
 # Margin: status
 
-Last updated: 2026-11-01. Submission deadline: 13 November 2026.
+Last updated: 2026-11-09. Submission deadline: 13 November 2026.
 
 ## Live vs simulated, today
 
 | Rail / component | Mode `mock` (default) | Mode `live` | State |
 |---|---|---|---|
-| Card holds (Airwallex) | `MockAirwallex` | `AirwallexHoldGateway`, sandbox | **Unblocked for intents** (new sandbox in a supported region, 2026-11-08): login and PaymentIntent creation work. Confirming needs Airwallex Drop-in/Elements in the browser (below); not built yet. |
+| Card holds (Airwallex) | `MockAirwallex` | `AirwallexHoldGateway`, sandbox | **LIVE in the sandbox** (2026-11-09): the customer confirms each hold in Airwallex Drop-in on the dashboard; increment, capture and cancel are real, and reconciliation reads each intent back from Airwallex. `npm run engine:live-cards`. [Run](live-runs/2026-11-09-dashboard-live-airwallex-run.md). |
 | Provider payments (Metal x402) | `MockMetal` | `MetalFloatGateway`, testnet | **LIVE on testnet** (2026-11-01). The engine pays through Metal's x402 facilitator, and providers verify each payment on chain. `npm run live:x402`; passes the adapter contract tests live. **On the dashboard via `npm run engine:live`.** The terminal demo still uses `MockMetal`. |
 | Mandates (Metal) | `MockMandateGateway`: same rules in memory, in front of every payment | `MetalMandateGateway`: real `metal-agent` mandate commands, `engine:live-mandate` | **LIVE on testnet** (2026-11-06): bind, pay, refusals recorded on chain, raise, revoke, and a full dashboard run through the mandate. Offline runs use the SIMULATED mandate. |
 | Clearing (Metal) | `ClearingEmulator` | none | **SIMULATED in every mode.** Not available to builders on testnet. |
 | LLM judge / explainer / report text | `TagJudge`, template lines | `LlmJudge`, `Explainer`, `ReportWritingProviders` on Gemini (`gemini-3.5-flash-lite`) or Claude (`claude-opus-5-5`) | **LIVE on Gemini** (2026-11-01 run below). Claude path tested with fakes only. |
 | Dashboard | Next.js 16 app + engine server, all rails mocked (`engine:offline`) | `engine:live`: Metal x402 LIVE, header MODE: MIXED, per-rail badges | **Built; live Metal rail verified in a browser** (2026-11-01, run below). |
 
-LIVE today: provider payments on Metal testnet (`npm run live:x402`, and the dashboard via `npm run engine:live`) and the LLM on Gemini. Card holds and clearing are SIMULATED (Airwallex region block; clearing not on testnet). The terminal demo is fully mocked.
+LIVE today: card holds in the Airwallex sandbox through Drop-in (`npm run engine:live-cards`), provider payments on Metal testnet (`npm run live:x402`, and the dashboard via `npm run engine:live`), Metal mandates (`engine:live-mandate`) and the LLM on Gemini. Clearing is SIMULATED (not on testnet). The terminal demo is fully mocked.
 
 ## Metal x402 payments, live (§5.2)
 
@@ -78,7 +78,7 @@ First version by Kavisha (`dbe6432`, Nov 6): mandate interface, simulated gatewa
 - If the rail can't answer, it leaves the hold open and reports it. It never captures a guess.
 - Then it captures what was spent (floored to the cent), or cancels, retrying transient errors. Events go through `Ledger`, the same as the engine's.
 - `test/sweeper.test.ts` simulates crashes with SQLite plus surviving holds and rail: capture/cancel, settled vs unsettled pending payments, unresolved-pending skip, idempotent re-sweep, transient vs permanent capture errors.
-- **Not wired into the dashboard on purpose:** its card holds are `MockAirwallex` in memory, so nothing survives a crash to sweep. The engine prints that at startup. It runs where holds are real Airwallex intents.
+- **Not wired into the dashboard yet.** With `--live-airwallex` the holds are real and outlive the process, but the session ledger is in memory, so after a crash there's no record to sweep against. The engine prints a warning at startup. **To do:** persist the session ledger in SQLite and run the sweeper on start.
 
 ### Live on testnet, 2026-11-06
 
@@ -205,7 +205,12 @@ Result of `npm run sim` (10,000 runs): **0 violations**. 143,996 running totals 
    - **Airwallex confirmed the cause** on Slack: the account was registered in India, where Payment Acceptance isn't supported. Their advice was a new sandbox with a supported business country.
    - **New sandbox, 2026-11-08: the region block is gone.** Login returns 201, and `payment_intents/create` returns 201 (`int_sgpvtdh4nhnz80dy0hz`, `REQUIRES_PAYMENT_METHOD`, $1 USD).
    - **Next wall, expected: confirming with raw card data is refused.** `confirm` with a card number from our server returns `400 validation_error: "This account is not enabled for native API access…"` (trace `9a38cd23a1fa48d58017d5dbfecf1f56`). Only merchants approved to handle raw card data may do that; everyone else collects the card in Airwallex Drop-in/Elements in the browser, using the intent's `client_secret`. That is what the project prompt requires anyway ("No raw card data touches our server"). The smoke script's server-side confirm path only works for approved accounts.
-   - **To do:** create the intent server-side, let the customer confirm it in Drop-in on the dashboard (pre-auth, manual capture), have the engine wait until the intent reaches `REQUIRES_CAPTURE`, then increment, capture and cancel server-side.
+   - **Done, 2026-11-09: Drop-in.** The engine creates the intent server-side. `BrowserConfirmedHolds` (`src/payments/airwallex-browser.ts`) asks the dashboard for a card (`card.required`), and `CardModal` mounts Drop-in (`pre_auth`, `autoCapture: false`). The engine polls until `REQUIRES_CAPTURE` (5-minute deadline, then it cancels the intent). Increment, capture and cancel run server-side. A full dashboard run reconciled to the cent: $1.47 captured, read back from Airwallex. It included a live increment ($0.75 → $1.24). See [the run](live-runs/2026-11-09-dashboard-live-airwallex-run.md).
+   - **`VERIFY` answered by the sandbox:**
+     - `increment_authorization.amount` is the new total.
+     - The captured amount is on the intent as `captured_amount`.
+     - `cancel` takes `cancellation_reason`.
+   - **Network loss:** a blip in the first live run left two holds open; they were cancelled by hand. Every Airwallex call now retries transient failures with backoff; `request_id`s make that safe.
    - Fixed from the docs: `authorization_type: "pre_auth"` and `auto_capture` apply "only when `payment_method` is provided", so they now go on **confirm**. They were on create, where they'd be ignored, and increments would have failed.
    - `npm run smoke:airwallex` is ready. It refuses non-sandbox hosts, uses Airwallex's published always-succeed Visa test card, and reads each intent back so the increment semantics (new total vs delta) come from the sandbox's own behaviour.
 2. **Metal testnet:** RPC endpoint and agent key **in place and verified 2026-11-01.**
@@ -224,4 +229,4 @@ Result of `npm run sim` (10,000 runs): **0 violations**. 143,996 running totals 
 
 - One clearing deposit per job is sized to the hold, not to the job's share of the float. In the emulator that is harmless. With live clearing, it would lock the full hold per job until the epoch closes.
 - Epochs advance by engine rounds, not wall-clock time.
-- A hold whose capture was deferred by the finality gate is left for the startup sweeper (`src/ledger/sweeper.ts`). That only applies where holds outlive the process (real Airwallex); dashboard holds are in-memory mocks.
+- A hold whose capture was deferred by the finality gate is left for the startup sweeper (`src/ledger/sweeper.ts`). That only applies where holds outlive the process (real Airwallex). The dashboard's live-card mode keeps its ledger in memory, so it can't sweep yet (see Sweeper).

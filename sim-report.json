@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-06T04:28:01.401Z",
+  "generatedAt": "2026-11-08T19:42:23.596Z",
   "runs": 10000,
   "seeds": [
     1,
@@ -54,5 +54,5 @@
     "premiumOnlyMicros": 13426810000,
     "savedPct": 51
   },
-  "durationMs": 18744
+  "durationMs": 17080
 }

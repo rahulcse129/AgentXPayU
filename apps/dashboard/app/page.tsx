@@ -6,6 +6,7 @@ import { Header } from "@/components/Header";
 import { JobCard } from "@/components/JobCard";
 import { Feed } from "@/components/Feed";
 import { ApprovalModal } from "@/components/ApprovalModal";
+import { CardModal } from "@/components/CardModal";
 import { Controls } from "@/components/Controls";
 import { Proof } from "@/components/Proof";
 import { Receipts, Reconciliation } from "@/components/Settlement";
@@ -101,6 +102,7 @@ export default function Dashboard() {
         </>
       )}
 
+      {state.cards[0] && !state.approval && <CardModal key={state.cards[0].holdId} card={state.cards[0]} queued={state.cards.length - 1} />}
       {state.approval && <ApprovalModal key={`${state.approval.jobId}-${state.approval.deadline}`} approval={state.approval} onAnswer={answer} />}
     </main>
   );

@@ -22,7 +22,8 @@ import { pathToFileURL } from "node:url";
 import { llmFromEnv, llmProviderFromEnv } from "../agent/llm-config.ts";
 import { MetalFloatGateway } from "../payments/metal.ts";
 import { MetalMandateGateway } from "../payments/mandate.ts";
-import { DemoSession, type ControlAction, type LiveMandate, type LiveMetal, type SessionMessage } from "./session.ts";
+import { AirwallexHoldGateway } from "../payments/airwallex.ts";
+import { DemoSession, type ControlAction, type LiveAirwallex, type LiveMandate, type LiveMetal, type SessionMessage } from "./session.ts";
 
 export interface RailStatus {
   rail: string;
@@ -73,7 +74,7 @@ function send(res: ServerResponse, status: number, data: unknown) {
 
 export function createEngineServer(
   env: NodeJS.ProcessEnv = process.env,
-  opts: { noLlm?: boolean; liveMetal?: boolean; liveMandate?: boolean } = {},
+  opts: { noLlm?: boolean; liveMetal?: boolean; liveMandate?: boolean; liveAirwallex?: boolean } = {},
 ) {
   const llm = opts.noLlm || env.DASHBOARD_LLM === "off" ? undefined : llmFromEnv(env);
   if (opts.liveMetal && opts.liveMandate) throw new Error("choose one: --live-metal (agent wallet) or --live-mandate (owner account)");
@@ -91,21 +92,29 @@ export function createEngineServer(
     payer = gw.payer;
     liveMandate = { rpcUrl: env.METAL_RPC_URL!.trim(), makeGateway: () => MetalMandateGateway.fromEnv(env) };
   }
+  let liveAirwallex: LiveAirwallex | undefined;
+  if (opts.liveAirwallex) {
+    if (!env.AIRWALLEX_CLIENT_ID || !env.AIRWALLEX_API_KEY) throw new Error("--live-airwallex needs AIRWALLEX_CLIENT_ID and AIRWALLEX_API_KEY in .env");
+    liveAirwallex = { makeApi: (runTag) => AirwallexHoldGateway.fromEnv(env, runTag) };
+  }
   const session = new DemoSession({
     llm,
     live,
     liveMandate,
+    liveAirwallex,
     paceScale: env.PACE_SCALE ? Number(env.PACE_SCALE) : 0.6,
     approvalTimeoutMs: env.APPROVAL_TIMEOUT_MS ? Number(env.APPROVAL_TIMEOUT_MS) : 30_000,
   });
 
   const meta = (): Meta => {
     const sim = readJson<{ badge: string; runs: number; passed: boolean; generatedAt: string; clearing?: { badge?: string } }>("sim-report.json");
-    const anyLive = Boolean(live || liveMandate);
+    const anyLive = Boolean(live || liveMandate || liveAirwallex);
     return {
       mode: anyLive ? "mixed" : "mock",
       rails: [
-        { rail: "Airwallex holds", source: "simulated", detail: "MockAirwallex: enforces capture ≤ hold. The team's sandbox has Payments disabled for its region." },
+        liveAirwallex
+          ? { rail: "Airwallex holds", source: "live", detail: "Airwallex sandbox PaymentIntents: the customer confirms each hold in Airwallex Drop-in (pre-auth, manual capture); increment, capture and cancel are real" }
+          : { rail: "Airwallex holds", source: "simulated", detail: "MockAirwallex: enforces capture ≤ hold. Run with --live-airwallex for real holds placed in Airwallex Drop-in." },
         live
           ? { rail: "Metal x402 payments", source: "live", detail: `Metal testnet (eip155:63825) via Metal's x402 facilitator; agent ${payer}; providers verify each payment on chain` }
           : liveMandate
@@ -175,13 +184,19 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const port = Number(process.env.PORT ?? 4100);
   const liveMetal = process.argv.includes("--live-metal");
   const liveMandate = process.argv.includes("--live-mandate");
-  const { server } = createEngineServer(process.env, { noLlm: process.argv.includes("--no-llm"), liveMetal, liveMandate });
+  const liveAirwallex = process.argv.includes("--live-airwallex");
+  const { server } = createEngineServer(process.env, { noLlm: process.argv.includes("--no-llm"), liveMetal, liveMandate, liveAirwallex });
 
   // Startup sweeper (src/ledger/sweeper.ts) needs holds that outlive this process. Dashboard card
   // holds are MockAirwallex, in memory: after a crash there is nothing left to capture or cancel,
   // so sweeping them would be pretend. It runs where holds are real (AirwallexHoldGateway).
-  console.log("[sweeper] idle: card holds are simulated in memory and do not survive a restart (runs with real Airwallex holds)");
+  console.log(
+    liveAirwallex
+      ? "[sweeper] idle: WARNING the session ledger is in memory, so Airwallex holds left open by a crash are not swept on restart; check the Airwallex dashboard"
+      : "[sweeper] idle: card holds are simulated in memory and do not survive a restart (runs with real Airwallex holds)",
+  );
 
   const rail = liveMandate ? "LIVE through a Metal mandate" : liveMetal ? "LIVE x402 (testnet)" : "SIMULATED (simulated mandate in front)";
-  server.listen(port, () => console.log(`margin engine on http://localhost:${port} · Metal rail: ${rail}  (dashboard: npm run dashboard)`));
+  const cards = liveAirwallex ? "LIVE (Airwallex sandbox, card entered in Drop-in)" : "SIMULATED";
+  server.listen(port, () => console.log(`margin engine on http://localhost:${port} · Metal rail: ${rail} · card holds: ${cards}  (dashboard: npm run dashboard)`));
 }

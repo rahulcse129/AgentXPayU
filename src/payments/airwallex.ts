@@ -26,6 +26,13 @@ export interface AirwallexConfig {
   currency?: string;
   /** Account ID for `x-login-as`, needed when a scoped key is linked to more than one account. */
   loginAs?: string;
+  /** Prefix for request_ids, unique per run, so job ids reused across runs (A, B, C) get new intents. */
+  runTag?: string;
+  /**
+   * Waits between attempts when a call fails transiently (network error or 5xx). Every POST carries a
+   * deterministic request_id, so a retry is deduped by Airwallex, never repeated. Default 1s, 3s, 8s, 20s (rides out ~30s of network loss).
+   */
+  retryDelaysMs?: number[];
 }
 
 /** The fields of a PaymentIntent we read back. Amounts are decimal major units. */
@@ -51,28 +58,35 @@ export class AirwallexHoldGateway implements HoldGateway {
     this.currency = cfg.currency ?? "USD";
   }
 
-  static fromEnv(): AirwallexHoldGateway {
-    const clientId = process.env.AIRWALLEX_CLIENT_ID;
-    const apiKey = process.env.AIRWALLEX_API_KEY;
+  static fromEnv(env: NodeJS.ProcessEnv = process.env, runTag?: string): AirwallexHoldGateway {
+    const clientId = env.AIRWALLEX_CLIENT_ID;
+    const apiKey = env.AIRWALLEX_API_KEY;
     if (!clientId || !apiKey) throw new Error("set AIRWALLEX_CLIENT_ID and AIRWALLEX_API_KEY (sandbox)");
     return new AirwallexHoldGateway({
       clientId,
       apiKey,
-      baseUrl: process.env.AIRWALLEX_BASE_URL,
-      loginAs: process.env.AIRWALLEX_LOGIN_AS || undefined,
+      baseUrl: env.AIRWALLEX_BASE_URL,
+      loginAs: env.AIRWALLEX_LOGIN_AS || undefined,
+      runTag,
     });
   }
 
   private async auth(): Promise<string> {
     if (this.token && this.token.expiresAt > Date.now() + 60_000) return this.token.value;
-    const res = await fetch(`${this.baseUrl}/api/v1/authentication/login`, {
-      method: "POST",
-      headers: {
-        "x-client-id": this.cfg.clientId,
-        "x-api-key": this.cfg.apiKey,
-        ...(this.cfg.loginAs ? { "x-login-as": this.cfg.loginAs } : {}),
-      },
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}/api/v1/authentication/login`, {
+        method: "POST",
+        headers: {
+          "x-client-id": this.cfg.clientId,
+          "x-api-key": this.cfg.apiKey,
+          ...(this.cfg.loginAs ? { "x-login-as": this.cfg.loginAs } : {}),
+        },
+      });
+    } catch (e) {
+      throw new TransientError(`airwallex login: ${String(e)}`);
+    }
+    if (res.status >= 500) throw new TransientError(`airwallex login: ${res.status} ${await res.text()}`);
     if (!res.ok) throw new Error(`airwallex login failed: ${res.status} ${await res.text()}`);
     const body = (await res.json()) as { token: string; expires_at?: string };
     const expiresAt = body.expires_at ? Date.parse(body.expires_at) : Date.now() + 25 * 60_000;
@@ -80,34 +94,62 @@ export class AirwallexHoldGateway implements HoldGateway {
     return body.token;
   }
 
-  private async post<T>(path: string, body: Record<string, unknown>): Promise<T> {
-    const token = await this.auth();
-    let res: Response;
-    try {
-      res = await fetch(`${this.baseUrl}${path}`, {
-        method: "POST",
-        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-        body: JSON.stringify(body),
-      });
-    } catch (e) {
-      throw new TransientError(`airwallex ${path}: ${String(e)}`);
+  /** One authenticated call, retried with backoff while it fails transiently. Returns the body text. */
+  private async send(label: string, path: string, init: { method: "GET" | "POST"; body?: string }): Promise<string> {
+    const delays = this.cfg.retryDelaysMs ?? [1000, 3000, 8000, 20_000];
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const token = await this.auth();
+        let res: Response;
+        try {
+          res = await fetch(`${this.baseUrl}${path}`, {
+            method: init.method,
+            headers: { authorization: `Bearer ${token}`, ...(init.body ? { "content-type": "application/json" } : {}) },
+            body: init.body,
+          });
+        } catch (e) {
+          throw new TransientError(`${label}: ${String(e)}`);
+        }
+        const text = await res.text();
+        if (res.status >= 500) throw new TransientError(`${label}: ${res.status} ${text}`);
+        if (res.status === 401) this.token = null; // expired token: log in again on the next call
+        if (!res.ok) {
+          if (text.includes("decline")) throw new IssuerDeclined(`${label}: ${text}`);
+          throw new Error(`${label}: ${res.status} ${text}`);
+        }
+        return text;
+      } catch (e) {
+        if (!(e instanceof TransientError) || attempt >= delays.length) throw e;
+        await new Promise((r) => setTimeout(r, delays[attempt]));
+      }
     }
-    const text = await res.text();
-    if (res.status >= 500) throw new TransientError(`airwallex ${path}: ${res.status} ${text}`);
-    if (!res.ok) {
-      if (text.includes("decline")) throw new IssuerDeclined(`airwallex ${path}: ${text}`);
-      throw new Error(`airwallex ${path}: ${res.status} ${text}`);
-    }
-    return JSON.parse(text) as T;
   }
 
-  async authorize({ jobId, amount, paymentMethod }: { jobId: string; amount: Micros; paymentMethod?: unknown }) {
+  private async post<T>(path: string, body: Record<string, unknown>): Promise<T> {
+    return JSON.parse(await this.send(`airwallex ${path}`, path, { method: "POST", body: JSON.stringify(body) })) as T;
+  }
+
+  get currencyCode(): string {
+    return this.currency;
+  }
+
+  /**
+   * Create the PaymentIntent the customer will confirm (no card involved). request_id is
+   * deterministic per (run, job), so a retried create returns the same intent instead of a second one.
+   */
+  async createIntent({ jobId, amount }: { jobId: string; amount: Micros }): Promise<{ holdId: string; clientSecret: string; currency: string }> {
+    const tag = this.cfg.runTag ? `${this.cfg.runTag}-` : "";
     const intent = await this.post<{ id: string; client_secret: string }>("/api/v1/pa/payment_intents/create", {
-      request_id: `margin-${jobId}-create`,
-      merchant_order_id: `margin-${jobId}`,
+      request_id: `margin-${tag}${jobId}-create`,
+      merchant_order_id: `margin-${tag}${jobId}`,
       amount: toMajor(amount),
       currency: this.currency,
     });
+    return { holdId: intent.id, clientSecret: intent.client_secret, currency: this.currency };
+  }
+
+  async authorize({ jobId, amount, paymentMethod }: { jobId: string; amount: Micros; paymentMethod?: unknown }) {
+    const intent = { id: (await this.createIntent({ jobId, amount })).holdId };
     if (paymentMethod) {
       // Per the API reference, authorization_type and auto_capture are "only applicable when
       // payment_method is provided", so they go on confirm, not create. pre_auth is what makes
@@ -123,23 +165,14 @@ export class AirwallexHoldGateway implements HoldGateway {
 
   /** Read an intent back: status and amounts, for the smoke test, receipts and the startup sweeper. */
   async retrieve(holdId: string): Promise<AirwallexIntent> {
-    const token = await this.auth();
-    let res: Response;
-    try {
-      res = await fetch(`${this.baseUrl}/api/v1/pa/payment_intents/${holdId}`, { headers: { authorization: `Bearer ${token}` } });
-    } catch (e) {
-      throw new TransientError(`airwallex retrieve ${holdId}: ${String(e)}`);
-    }
-    const text = await res.text();
-    if (res.status >= 500) throw new TransientError(`airwallex retrieve ${holdId}: ${res.status} ${text}`);
-    if (!res.ok) throw new Error(`airwallex retrieve ${holdId}: ${res.status} ${text}`);
+    const text = await this.send(`airwallex retrieve ${holdId}`, `/api/v1/pa/payment_intents/${holdId}`, { method: "GET" });
     return JSON.parse(text) as AirwallexIntent;
   }
 
   async increment(holdId: string, newTotal: Micros) {
     await this.post(`/api/v1/pa/payment_intents/${holdId}/increment_authorization`, {
       request_id: `margin-${holdId}-inc-${newTotal}`,
-      // VERIFY: whether `amount` is the new total or the delta. We pass the new total.
+      // `amount` is the new total, not the delta: confirmed in the sandbox 2026-11-09 (0.75 raised with 1.24 reads back 1.24).
       amount: toMajor(newTotal),
     });
   }
@@ -154,7 +187,7 @@ export class AirwallexHoldGateway implements HoldGateway {
   async cancel(holdId: string, reason: string) {
     await this.post(`/api/v1/pa/payment_intents/${holdId}/cancel`, {
       request_id: `margin-${holdId}-cancel`,
-      cancellation_reason: reason, // VERIFY: field name
+      cancellation_reason: reason, // accepted by the sandbox (2026-11-09)
     });
   }
 }

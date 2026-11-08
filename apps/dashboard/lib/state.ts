@@ -38,6 +38,17 @@ export interface FeedItem {
   tone: Tone;
 }
 
+/** A customer must place their card hold in Airwallex Drop-in before the job can start. */
+export interface CardRequest {
+  jobId: string;
+  customer: string;
+  amount: Micros;
+  currency: string;
+  holdId: string;
+  clientSecret: string;
+  deadline: number;
+}
+
 export interface Approval {
   jobId: string;
   customer: string;
@@ -58,6 +69,8 @@ export interface DashState {
   jobs: Record<string, JobView>;
   feed: FeedItem[];
   approval: Approval | null;
+  /** Card holds waiting for the customer, in the order the engine asked for them. */
+  cards: CardRequest[];
   summary: RunSummary | null;
   error: string | null;
 }
@@ -73,6 +86,7 @@ export const EMPTY: DashState = {
   jobs: {},
   feed: [],
   approval: null,
+  cards: [],
   summary: null,
   error: null,
 };
@@ -132,6 +146,10 @@ function applyEvent(s: DashState, e: LedgerEvent): DashState {
   if (e.type === "float.deposited") return { ...s, reserveLeft: Number(d.reserve) };
   if (e.type === "reserve.granted") s = { ...s, reserveLeft: Number(d.reserveLeft) };
   if (e.type === "hold.increase_answer" && s.approval?.jobId === e.jobId) s = { ...s, approval: null };
+  // Airwallex confirmed the hold (or the job gave up on it): the card step for that job is done.
+  if ((e.type === "hold.authorized" || e.type === "job.failed") && s.cards.some((c) => c.jobId === e.jobId)) {
+    s = { ...s, cards: s.cards.filter((c) => c.jobId !== e.jobId) };
+  }
   const j = e.jobId ? s.jobs[e.jobId] : undefined;
   if (!j) return s;
   const n: JobView = { ...j };
@@ -178,14 +196,16 @@ export function reduce(s: DashState, m: SessionMessage): DashState {
       }
       return next;
     }
+    case "card.required":
+      return { ...s, cards: [...s.cards.filter((c) => c.jobId !== m.jobId), { jobId: m.jobId, customer: m.customer, amount: m.amount, currency: m.currency, holdId: m.holdId, clientSecret: m.clientSecret, deadline: m.deadline }] };
     case "approval.requested":
       return { ...s, approval: { jobId: m.jobId, customer: m.customer, current: m.current, newTotal: m.newTotal, reason: m.reason, deadline: m.deadline } };
     case "feed.phrased":
       return { ...s, feed: s.feed.map((f) => (m.lines[f.seq] ? { ...f, phrased: m.lines[f.seq]! } : f)) };
     case "run.finished":
-      return { ...s, running: false, approval: null, summary: m.summary };
+      return { ...s, running: false, approval: null, cards: [], summary: m.summary };
     case "run.failed":
-      return { ...s, running: false, approval: null, error: m.error };
+      return { ...s, running: false, approval: null, cards: [], error: m.error };
   }
 }
 

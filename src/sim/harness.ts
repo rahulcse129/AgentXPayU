@@ -200,9 +200,16 @@ export async function runScenario(sc: Scenario, sabotage?: Sabotage, opts: { jud
 
 // ------------------------------------------------------------------ invariants
 
+/** What the checks need to know about card holds; MockAirwallex already has this shape. */
+export interface HoldsView {
+  violations: string[];
+  holds: Map<string, { holdId: string; jobId: string; status: string }>;
+}
+
 export function checkInvariants(w: {
   ledger: Ledger;
-  airwallex: MockAirwallex;
+  /** MockAirwallex, or live holds as Airwallex reports them (violations: refusals of rule-breaking calls). */
+  airwallex: HoldsView;
   /** The mock rail. Without it, pass `railSettlements` read back from the live rail. */
   metal?: MockMetal;
   railSettlements?: { key: string; payTo: string; amount: Micros }[];

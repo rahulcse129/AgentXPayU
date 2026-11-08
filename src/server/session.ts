@@ -19,6 +19,9 @@ import { CATALOG, ROGUE_PROVIDER_ID, providerById } from "../policy/catalog.ts";
 import { DEFAULT_POLICY } from "../policy/types.ts";
 import type { Micros } from "../money.ts";
 import { MockAirwallex } from "../payments/mock-airwallex.ts";
+import type { AirwallexHoldGateway } from "../payments/airwallex.ts";
+import { BrowserConfirmedHolds, holdStatusOf } from "../payments/airwallex-browser.ts";
+import type { HoldsView } from "../sim/harness.ts";
 import { MockMetal } from "../payments/mock-metal.ts";
 import type { FloatGateway } from "../payments/types.ts";
 import type { MetalFloatGateway } from "../payments/metal.ts";
@@ -74,6 +77,8 @@ export interface JobSummary {
   captured: Micros;
   released: Micros;
   holdOutcome: JobResult["holdOutcome"];
+  /** The card hold's id: an Airwallex PaymentIntent (int_…) when live. */
+  holdId?: string;
   premiumOnly: Micros;
   dropped: string[];
   receipt: ReceiptRow[];
@@ -90,6 +95,8 @@ export interface RunSummary {
   rail: { source: "live" | "simulated"; payer?: string; network?: string };
   /** The Metal mandate the batch paid through, if any (the second lock). */
   mandate: { source: "live" | "simulated"; mandateId: string; bindTx: string; revokeTx: string | null; budget: Micros; perPaymentCap: Micros; payees: number } | null;
+  /** Card holds: MockAirwallex, or Airwallex PaymentIntents read back from Airwallex after the run. */
+  holds: { source: "live" | "simulated" };
 }
 
 /** The live Metal rail for dashboard runs: x402 straight from the agent wallet, no mandate. */
@@ -104,6 +111,17 @@ export interface LiveMandate {
   rpcUrl: string;
   makeGateway: () => MetalMandateGateway;
 }
+
+/** Live Airwallex card holds: the customer confirms each PaymentIntent in Drop-in on the dashboard. */
+export interface LiveAirwallex {
+  /** A client whose request_ids are unique to this run (job ids A, B, C repeat across runs). */
+  makeApi: (runTag: string) => AirwallexHoldGateway;
+  /** How long to wait for a customer to enter their card (default 5 minutes). */
+  cardTimeoutMs?: number;
+}
+
+/** Airwallex amounts are decimal major units; holds are whole cents. */
+const majorToMicros = (major: number): Micros => Math.round(major * 100) * 10_000;
 
 /** Providers the engine buys from, plus the demo-control hooks on them. */
 interface ProviderBackend {
@@ -147,6 +165,8 @@ export type SessionMessage =
   | { kind: "run.started"; runId: number; scripted: boolean; float: Micros; reserve: Micros; jobs: { id: string; customer: string; topic: string; hold: Micros; steps: { id: string; kind: string; units: number }[] }[] }
   | { kind: "event"; runId: number; event: LedgerEvent; fact: string | null; policy: string | null }
   | { kind: "approval.requested"; runId: number; jobId: string; customer: string; current: Micros; newTotal: Micros; reason: string; deadline: number }
+  /** The customer must place the card hold in Airwallex Drop-in. The client_secret is meant for the browser. */
+  | { kind: "card.required"; runId: number; jobId: string; customer: string; amount: Micros; currency: string; holdId: string; clientSecret: string; deadline: number }
   | { kind: "feed.phrased"; runId: number; lines: Record<number, string> }
   | { kind: "run.finished"; runId: number; summary: RunSummary }
   | { kind: "run.failed"; runId: number; error: string };
@@ -193,8 +213,14 @@ export class DemoSession {
       live?: LiveMetal;
       /** Live payments through a Metal mandate on the owner's account. */
       liveMandate?: LiveMandate;
+      /** Live card holds: Airwallex PaymentIntents confirmed by the customer in Drop-in. */
+      liveAirwallex?: LiveAirwallex;
     } = {},
   ) {}
+
+  get holdsSource(): "live" | "simulated" {
+    return this.opts.liveAirwallex ? "live" : "simulated";
+  }
 
   get railSource(): "live" | "simulated" {
     return this.opts.live || this.opts.liveMandate ? "live" : "simulated";
@@ -296,7 +322,22 @@ export class DemoSession {
         queueMicrotask(() => ledger.log(null, "demo.quote_check_restored", { why: "the Metal mandate refused the payment; our own quote check is back on" }));
       }
     });
-    const airwallex = new MockAirwallex();
+    // Card holds: simulated, or real PaymentIntents the customer confirms in Drop-in on the dashboard.
+    const liveCards = this.opts.liveAirwallex;
+    const airwallex: MockAirwallex | BrowserConfirmedHolds = liveCards
+      ? new BrowserConfirmedHolds(
+          liveCards.makeApi(`r${Date.now().toString(36)}`),
+          (req) =>
+            this.emit({
+              kind: "card.required",
+              runId,
+              ...req,
+              customer: DEMO_JOBS.find((j) => j.id === req.jobId)?.customer ?? req.jobId,
+              deadline: Date.now() + (liveCards.cardTimeoutMs ?? 5 * 60_000),
+            }),
+          { timeoutMs: liveCards.cardTimeoutMs ?? 5 * 60_000 },
+        )
+      : new MockAirwallex();
     const live = this.opts.live;
     const liveMandate = this.opts.liveMandate;
     const rpcUrl = live?.rpcUrl ?? liveMandate?.rpcUrl;
@@ -400,7 +441,7 @@ export class DemoSession {
   private async summarize(
     results: JobResult[],
     ledger: Ledger,
-    airwallex: MockAirwallex,
+    airwallex: MockAirwallex | BrowserConfirmedHolds,
     float: FloatGateway,
     clearing: ClearingEmulator,
     recorder: RecordingProviders,
@@ -429,9 +470,41 @@ export class DemoSession {
       }
     }
     const settledFor = (jobId: string) => settled.filter((s) => s.key.startsWith(`${jobId}:`)).reduce((a, s) => a + s.amount, 0);
+
+    // Card holds as the card side reports them: MockAirwallex's own records, or each
+    // PaymentIntent read back from Airwallex after the run (not what our ledger believes).
+    const heldBy = new Map<string, { holdId: string; jobId: string; status: string; authorized: Micros; captured: Micros }>();
+    const holdProblems: string[] = [];
+    if (airwallex instanceof MockAirwallex) {
+      for (const h of airwallex.holds.values()) heldBy.set(h.holdId, h);
+    } else {
+      for (const r of results) {
+        const row = ledger.hold(r.jobId);
+        if (!row) continue;
+        let intent;
+        try {
+          intent = await airwallex.api.retrieve(row.holdId);
+        } catch (e) {
+          // Cannot see what the card side holds, so it cannot reconcile: say so instead of failing the run.
+          holdProblems.push(`airwallex.unreadable: ${row.holdId} could not be read back (${String(e)})`);
+          continue;
+        }
+        const status = holdStatusOf(intent);
+        const capturedMajor = intent.captured_amount ?? intent.latest_payment_attempt?.captured_amount;
+        if (status === "captured" && capturedMajor === undefined) holdProblems.push(`airwallex.captured_unknown: ${row.holdId} reports no captured amount`);
+        heldBy.set(row.holdId, {
+          holdId: row.holdId,
+          jobId: r.jobId,
+          status,
+          authorized: majorToMicros(intent.amount),
+          captured: status === "captured" ? majorToMicros(capturedMajor ?? 0) : 0,
+        });
+      }
+    }
+    const holdsView: HoldsView = { violations: airwallex instanceof MockAirwallex ? airwallex.violations : [], holds: heldBy };
     const jobs = results.map((r): JobSummary => {
       const spec = DEMO_JOBS.find((j) => j.id === r.jobId)!;
-      const hold = [...airwallex.holds.values()].find((h) => h.jobId === r.jobId);
+      const hold = [...heldBy.values()].find((h) => h.jobId === r.jobId);
       const captured = hold?.status === "captured" ? hold.captured : 0;
       return {
         jobId: r.jobId,
@@ -446,6 +519,7 @@ export class DemoSession {
         captured,
         released: (hold?.authorized ?? 0) - captured,
         holdOutcome: r.holdOutcome,
+        holdId: hold?.holdId,
         premiumOnly: r.premiumOnlyCost,
         dropped: r.dropped,
         receipt: receiptFor(r.jobId, ledger, events, recorder, isLive ? "live" : "simulated"),
@@ -464,8 +538,9 @@ export class DemoSession {
       floatWithdrawn: fromEvents("float.withdrawn"),
     };
     const violations = [
-      ...checkInvariants({ ledger, airwallex, metal, railSettlements: metal ? undefined : settled, quoted: recorder.quoted, clearing }),
+      ...checkInvariants({ ledger, airwallex: holdsView, metal, railSettlements: metal ? undefined : settled, quoted: recorder.quoted, clearing }),
       ...chainProblems,
+      ...holdProblems,
     ];
     const perJobOk = jobs.every((j) => j.ledgerPaid === j.railSettled && j.railSettled === j.clearingRedeemed && j.clearingRedeemed === j.captured);
     const totalOk = totals.ledgerPaid === totals.railSettled && totals.railSettled === totals.clearingRedeemed && totals.clearingRedeemed === totals.captured;
@@ -477,6 +552,7 @@ export class DemoSession {
       violations,
       llm: llm ? { calls: llm.calls, failures: llm.failures, tripped: llm.tripped } : null,
       rail: isLive ? { source: "live", payer, network: "Metal testnet (eip155:63825)" } : { source: "simulated" },
+      holds: { source: airwallex instanceof MockAirwallex ? "simulated" : "live" },
       mandate: manager?.active
         ? {
             source: manager.source,

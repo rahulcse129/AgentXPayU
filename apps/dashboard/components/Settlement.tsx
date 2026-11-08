@@ -63,7 +63,7 @@ export function Reconciliation({ summary }: { summary: RunSummary }) {
               Clearing redeemed <span className="badge badge-simulated">SIM</span>
             </th>
             <th>
-              Airwallex captured <span className="badge badge-simulated">SIM</span>
+              Airwallex captured <SourceBadge source={summary.holds.source} />
             </th>
             <th />
           </tr>
@@ -156,6 +156,11 @@ export function Receipts({ summary }: { summary: RunSummary }) {
                   {fmt(j.holdInitial)}
                   {j.holdFinal !== j.holdInitial && ` → ${fmt(j.holdFinal)}`}
                 </dd>
+                {j.holdId && summary.holds.source === "live" && (
+                  <dd className="mono small" title="Airwallex PaymentIntent, read back from Airwallex after the run">
+                    Airwallex {j.holdId}
+                  </dd>
+                )}
               </div>
               <div>
                 <dt>Captured</dt>

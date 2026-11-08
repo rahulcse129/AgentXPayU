@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@airwallex/components-sdk": "1.36.0",
     "next": "16.4.2",
     "react": "19.2.9",
     "react-dom": "19.2.9"

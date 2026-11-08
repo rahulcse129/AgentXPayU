@@ -220,3 +220,5 @@ td.mono a:hover { text-decoration: underline; }
 .locks a { color: var(--accent); text-decoration: none; font-size: 14px; }
 .locks a:hover { text-decoration: underline; }
 .lock-sep { color: var(--muted); }
+.card-modal { width: min(620px, 100%); border-top-color: var(--accent); }
+.dropin { min-height: 120px; }
