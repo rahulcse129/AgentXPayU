@@ -13,6 +13,8 @@ Last updated: 2026-11-09. Submission deadline: 13 November 2026.
 | LLM judge / explainer / report text | `TagJudge`, template lines | `LlmJudge`, `Explainer`, `ReportWritingProviders` on Gemini (`gemini-3.5-flash-lite`) or Claude (`claude-opus-5-5`) | **LIVE on Gemini** (2026-11-01 run below). Claude path tested with fakes only. |
 | Dashboard | Next.js 16 app + engine server, all rails mocked (`engine:offline`) | `engine:live`: Metal x402 LIVE, header MODE: MIXED, per-rail badges | **Built; live Metal rail verified in a browser** (2026-11-01, run below). |
 
+**Every buildable rail live in one run (2026-11-09):** `npm run engine:live-full`, with Airwallex holds via Drop-in, x402 payments through a live Metal mandate, and the mandate refusing an unregistered payee on chain. It reconciled to $1.47 with 0 violations. [Run](live-runs/2026-11-09-dashboard-all-live-run.md).
+
 LIVE today: card holds in the Airwallex sandbox through Drop-in (`npm run engine:live-cards`), provider payments on Metal testnet (`npm run live:x402`, and the dashboard via `npm run engine:live`), Metal mandates (`engine:live-mandate`) and the LLM on Gemini. Clearing is SIMULATED (not on testnet). The terminal demo is fully mocked.
 
 ## Metal x402 payments, live (§5.2)
