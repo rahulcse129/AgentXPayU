@@ -10,35 +10,26 @@ const BUTTONS: { action: ControlAction; label: string; tone?: "bad" }[] = [
   { action: "rogue_honest", label: "Rogue provider: honest" },
 ];
 
-export function Controls({
-  running,
-  onRun,
-  onControl,
-  toast,
-}: {
-  running: boolean;
-  onRun: (scripted: boolean) => void;
-  onControl: (a: ControlAction) => void;
-  toast: { ok: boolean; message: string } | null;
-}) {
+/** Faults to throw at a running batch. Starting a run lives in the page header. */
+export function Controls({ running, onControl }: { running: boolean; onControl: (a: ControlAction) => void }) {
   return (
-    <section className="card controls" aria-label="Demo controls">
-      <h3>Demo controls</h3>
-      <div className="run-buttons">
-        <button className="btn primary" disabled={running} onClick={() => onRun(true)}>
-          Run scripted demo
-        </button>
-        <button className="btn" disabled={running} onClick={() => onRun(false)}>
-          Run, faults by hand
-        </button>
+    <section className="card controls" aria-label="Inject faults">
+      <div className="card-head">
+        <h3>Inject faults</h3>
+        <p className="muted small">
+          {running
+            ? "The scripted run already overruns B, slows the 1¢ model and sends a rogue. Add more here."
+            : "Available while a run is in progress."}
+        </p>
       </div>
-      <p className="small muted">Scripted: B overruns ×4 and the 1¢ model slows at round 2, C overruns at round 3, the rogue overquotes. You answer every hold increase.</p>
       <div className="fault-buttons">
         {BUTTONS.map((b) => (
           <button key={b.action} className={`btn small-btn ${b.tone ?? ""}`} disabled={!running} onClick={() => onControl(b.action)}>
             {b.label}
           </button>
         ))}
+      </div>
+      <div className="mandate-test">
         <button
           className="btn small-btn bad"
           disabled={!running}
@@ -47,12 +38,8 @@ export function Controls({
         >
           Disable our quote check (mandate test)
         </button>
+        <p className="muted small">Turns our own check off for one attempt, so only the Metal mandate stands between the rogue and the money.</p>
       </div>
-      {toast && (
-        <p className={`toast ${toast.ok ? "ok" : "bad"}`} role="status">
-          {toast.message}
-        </p>
-      )}
     </section>
   );
 }

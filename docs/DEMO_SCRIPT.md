@@ -26,9 +26,14 @@ A live run takes about 5–6 minutes of real time and spends about 1.5 testnet U
 
 ## Shot list
 
+The dashboard has four views in the left sidebar: **Overview** (job cards, recent activity, fault buttons,
+rails), **Activity** (the full feed with filters, plus the fault buttons), **Settlement** (reconciliation and
+receipts) and **Proof**. **Run scripted demo** is at the top right of every view.
+
 ### 1. Hook (0:00–0:15)
 
-**Screen:** the dashboard before the run. The header shows **MODE: MIXED**, with the rail badges visible.
+**Screen:** the Overview before the run. The banner at the top names the live rails, and the sidebar shows
+**Mode: MIXED**.
 
 > "AI agents are starting to spend money for people. Margin is an agent that buys inference for research jobs,
 > and it makes two promises it can't break: never charge a customer more than they agreed to, and never pay a
@@ -36,8 +41,8 @@ A live run takes about 5–6 minutes of real time and spends about 1.5 testnet U
 
 ### 2. The setup (0:15–0:30)
 
-**Screen:** hover over the rail badges, or point at them. Airwallex holds LIVE, Metal payments LIVE, Metal
-mandate LIVE, clearing SIM.
+**Screen:** scroll down the Overview to the **Rails** table: Airwallex holds LIVE, Metal payments LIVE, Metal
+mandate LIVE, clearing SIMULATED.
 
 > "Three customers each want a research report. Card holds are live in the Airwallex sandbox, and providers
 > are paid live on Metal testnet through a mandate. Clearing is simulated, because it isn't open on testnet
@@ -56,11 +61,12 @@ to finish loading, then enter `4035 5010 0000 0008`, `12/30`, CVC `123` and a na
 
 ### 4. Sourcing (0:55–1:25)
 
-**Screen:** the job cards fill up, and the reasoning feed shows lines like
-"buy from model-std for $0.24, the cheapest tier-2 option that fits".
+**Screen:** on the Overview, the job cards fill up and **Recent activity** shows lines like
+"buy from model-std for $0.24, the cheapest tier-2 option that fits". Then switch to **Activity** in the
+sidebar: the full feed and the fault buttons sit side by side there, which suits shots 4–7.
 
 **Action (off-narration):** as soon as the feed shows "⚠ model-lite slows to ~2.5s under load", press
-**Trigger overrun (job B ×4)**. That guarantees B asks to raise its hold later; without it, B sometimes
+**Trigger overrun (job B ×4)** in the **Inject faults** panel. That guarantees B asks to raise its hold later; without it, B sometimes
 finishes within $0.75. Pressing earlier does nothing extra: before that line, the press merges into the
 scripted overrun.
 
@@ -70,13 +76,15 @@ scripted overrun.
 
 ### 5. Lock one: our policy check (1:25–1:40)
 
-**Screen:** the red feed line "model-bargain blocked (quoted $0.42, list price $0.14)".
+**Screen:** the red feed line "model-bargain blocked (quoted $0.42, list price $0.14)". Click the
+**Refusals** filter above the feed to show only the blocked payments.
 
 > "A rogue provider asks for three times its list price. Our policy check refuses it before a cent moves."
 
 ### 6. Lock two: the Metal mandate (1:40–2:05)
 
-**Action:** right after that refusal, press **Disable our quote check (mandate test)**.
+**Action:** right after that refusal, press **Disable our quote check (mandate test)** at the bottom of the
+**Inject faults** panel.
 
 **Screen:** a few seconds later, the feed shows "Metal mandate refused … mandate_payee_not_listed … refusal
 recorded on chain", then "our quote check is back on".
@@ -96,7 +104,8 @@ appears; press **Decline**.
 
 ### 8. Settle and reconcile (2:25–2:50)
 
-**Screen:** scroll to **Reconciliation**. Point at "✓ Every dollar accounted for", the matching columns
+**Screen:** click **Settlement** in the sidebar (or **View settlement →** in the green banner on the
+Overview). Point at "✓ Every dollar accounted for", the matching columns
 (Ledger paid = Settled on chain = Clearing = Airwallex captured), and the Locks row with the mandate's bind and
 revoke links.
 
@@ -106,7 +115,7 @@ revoke links.
 
 ### 9. The proof is real (2:50–3:05)
 
-**Action:** in a receipt, click one Metal tx link, and the testnet explorer opens on that transaction. Then
+**Action:** scroll down Settlement to the receipts. Click one Metal tx link, and the testnet explorer opens on that transaction. Then
 switch to the Airwallex tab and open that job's PaymentIntent: status **Succeeded**, with a captured amount
 below the authorized amount.
 
@@ -115,8 +124,8 @@ below the authorized amount.
 
 ### 10. Close (3:05–3:20)
 
-**Screen:** the terminal, running `npm run check` (record it separately; it takes about 2 minutes, so show
-the final lines).
+**Screen:** click **Proof** in the sidebar: the 10,000-run result and the sabotage table, every broken engine
+CAUGHT. Optionally cut to a terminal running `npm run check` and show its final lines.
 
 > "Behind it, 10,000 simulated runs with rogue providers, crashes and declines show 0 overcharges and 0 double
 > payments. Five deliberately broken engines are each caught. Margin: an agent you can trust with a card."

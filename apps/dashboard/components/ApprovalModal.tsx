@@ -5,6 +5,8 @@ import { fmt, type Approval } from "@/lib/state";
 export function ApprovalModal({ approval, onAnswer }: { approval: Approval; onAnswer: (jobId: string, approve: boolean) => Promise<void> }) {
   const [now, setNow] = useState(() => Date.now());
   const [busy, setBusy] = useState(false);
+  // The bar spans the whole time the engine gave us (APPROVAL_TIMEOUT_MS), not a fixed 30 s.
+  const [total] = useState(() => Math.max(1, Math.ceil((approval.deadline - Date.now()) / 1000)));
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 250);
     return () => clearInterval(t);
@@ -32,7 +34,7 @@ export function ApprovalModal({ approval, onAnswer }: { approval: Approval; onAn
         <div className="countdown" aria-live="polite">
           <span className="num">{left}s</span> left · no answer counts as a decline
           <div className="meter thin">
-            <span style={{ width: `${(left / 30) * 100}%` }} />
+            <span style={{ width: `${Math.min(100, (left / total) * 100)}%` }} />
           </div>
         </div>
         <div className="modal-actions">

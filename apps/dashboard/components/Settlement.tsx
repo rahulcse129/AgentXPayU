@@ -115,12 +115,12 @@ export function Receipts({ summary }: { summary: RunSummary }) {
                 <tr>
                   <th>Step</th>
                   <th>Provider</th>
-                  <th>List price</th>
-                  <th>Paid</th>
+                  <th className="num">List price</th>
+                  <th className="num">Paid</th>
                   <th>
                     Metal tx <SourceBadge source={summary.rail.source} />
                   </th>
-                  <th>
+                  <th className="num">
                     Clearing total <span className="badge badge-simulated">SIM</span>
                   </th>
                   <th>Policy reason</th>

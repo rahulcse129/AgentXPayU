@@ -19,12 +19,12 @@ export function JobCard({ job, approval, running }: { job: JobView; approval: Ap
   return (
     <article className={`card job job-${status}`}>
       <header className="job-head">
-        <div>
+        <div className="job-top">
           <span className="job-id">{job.id}</span>
-          <h2>{job.customer}</h2>
-          <p className="muted small">{job.topic}</p>
+          <span className={`chip chip-${status}`}>{label}</span>
         </div>
-        <span className={`chip chip-${status}`}>{label}</span>
+        <h2>{job.customer}</h2>
+        <p className="muted small">{job.topic}</p>
       </header>
 
       <div className="job-money">
