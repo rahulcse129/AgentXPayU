@@ -76,21 +76,121 @@ Node ≥ 22.13.
 
 ## Architecture
 
+### The system
+
 ```mermaid
-flowchart LR
-  C[Customer] -- card in Drop-in / approves increase --> AW
-  C -- approves increase --> E
-  subgraph Margin
-    E[Orchestrator<br/>src/engine] --> P[Policy module<br/>pure functions]
-    E --> L[(Ledger<br/>SQLite)]
-    E --> J[LLM judge<br/>score + explain only]
+flowchart TB
+  C(["Customer"])
+
+  subgraph Browser["Dashboard (Next.js)"]
+    direction LR
+    DI["Airwallex Drop-in<br/>card entry"]
+    UI["Overview, Activity,<br/>Settlement, Proof"]
   end
-  E -- create / increment / capture / cancel --> AW[Airwallex]
-  E -- x402 pay per request --> MD[Metal mandate<br/>payee list, cap, budget]
-  MD --> M[Metal USDZ]
-  E -. signed running totals .-> CL[Clearing<br/>EMULATED]
-  M --> PR[Providers<br/>verify payment on chain]
+
+  subgraph Engine["Margin engine (Node 22)"]
+    ORC["Orchestrator<br/>plans, buys, settles"]
+    SWP["Startup sweeper<br/>closes holds a crash left open"]
+    POL["Policy<br/>quote check, budget,<br/>hold increases"]
+    LED[("Ledger<br/>SQLite")]
+    LLM["LLM judge<br/>scores and explains only"]
+    ORC --> POL
+    ORC --> LED
+    ORC --> LLM
+    SWP --> LED
+  end
+
+  subgraph AW["Airwallex sandbox"]
+    PI["PaymentIntent<br/>pre-auth, increment,<br/>capture, cancel"]
+  end
+
+  subgraph Metal["Metal testnet"]
+    MAN["Mandate<br/>payee list, cap, budget"]
+    USDZ["USDZ via x402"]
+    CLR["Clearing<br/>SIMULATED"]
+    MAN --> USDZ
+  end
+
+  PROV["Providers: models, search, data<br/>verify each payment on chain"]
+
+  C -->|"enters card"| DI
+  C -->|"approves holds and increases"| UI
+  UI <-->|"commands, live events"| ORC
+  DI -->|"card data, direct"| PI
+  ORC -->|"hold, increment, capture"| PI
+  SWP -.->|"capture or cancel"| PI
+  ORC -->|"pay per request"| MAN
+  ORC -.->|"signed totals"| CLR
+  USDZ --> PROV
+  POL ~~~ PI
+  LLM ~~~ MAN
 ```
+
+Card data goes from Drop-in straight to Airwallex; the engine only ever sees the PaymentIntent. The LLM never moves money: every payment decision is made by the policy module, and every payment passes two locks, our quote check and then the Metal mandate.
+
+### One job, end to end
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor C as Customer
+  participant D as Dashboard + Drop-in
+  participant E as Margin engine
+  participant A as Airwallex
+  participant M as Metal mandate
+  participant P as Provider
+
+  E->>A: Create PaymentIntent for the job's budget
+  E-->>D: Card required
+  C->>D: Enters card in Drop-in
+  D->>A: Confirm as pre-auth (card data never reaches the engine)
+  E->>A: Poll until REQUIRES_CAPTURE
+  Note over E: Hold placed. The job may spend up to it, never more.
+
+  loop Each step of the job
+    E->>P: Ask for a quote
+    P-->>E: 402 Payment Required: price and pay-to address
+    E->>E: Lock 1, policy: list price, registered payee, fits the budget
+    E->>E: Ledger row written before any money moves
+    E->>M: Pay under the mandate
+    M->>M: Lock 2: payee on the list, under the cap and budget
+    M->>P: USDZ transfer on Metal testnet
+    P->>P: Verify the payment on chain
+    P-->>E: Result, scored by the quality judge (LLM when enabled)
+  end
+
+  opt The job needs more than the hold
+    E-->>D: Ask the customer to raise the hold
+    alt Customer approves
+      C->>D: Approve
+      E->>A: Incremental authorization
+      E->>M: Raise the mandate budget by the same amount
+    else Customer declines or times out
+      E->>E: Trim the plan to fit the hold
+    end
+  end
+
+  E->>A: Capture exactly what was spent, release the rest
+  E->>E: Reconcile ledger = rail = clearing = Airwallex captured
+  E-->>D: Reconciliation and receipts
+```
+
+If the engine crashes mid-job, the hold stays open at Airwallex. On the next start, the sweeper reads that run's ledger and captures what was spent or cancels the hold.
+
+### Where it lives
+
+| Part | Code |
+|---|---|
+| Orchestrator: plans each job, buys steps, asks for increases, settles | [src/engine/](src/engine/) |
+| Policy: quote check, budget, hold-increase planning, as pure functions | [src/policy/](src/policy/) |
+| Ledger: idempotent payments and holds in SQLite; startup sweeper | [src/ledger/](src/ledger/) |
+| Airwallex holds, Drop-in wait, Metal x402 payments, mandates | [src/payments/](src/payments/) |
+| Providers: x402 servers that verify each payment on chain | [src/providers/](src/providers/) |
+| Clearing emulator (signed running totals, finality) | [src/clearing/](src/clearing/) |
+| LLM judge, feed narration, report text | [src/agent/](src/agent/) |
+| Engine server and crash recovery | [src/server/](src/server/) |
+| Dashboard | [apps/dashboard/](apps/dashboard/) |
+| 10,000-run simulation and sabotage proof | [src/sim/](src/sim/) |
 
 ## LIVE vs SIMULATED
 
