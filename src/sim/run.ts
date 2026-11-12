@@ -102,7 +102,7 @@ async function main() {
     totals: t,
     clearing: {
       source: "simulated",
-      note: "Metal clearing is not available on testnet; ClearingEmulator follows the Kit 12 rules.",
+      note: "Margin runs Metal clearing through ClearingEmulator, which follows the Kit 12 rules; the live testnet deployment is not wired in yet.",
       totalsSigned: t.clearingTotalsSigned,
       redemptions: t.clearingRedemptions,
       redeemedMicros: t.clearingRedeemed,

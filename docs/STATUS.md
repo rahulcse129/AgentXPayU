@@ -9,13 +9,13 @@ Last updated: 2026-11-09. Submission deadline: 13 November 2026.
 | Card holds (Airwallex) | `MockAirwallex` | `AirwallexHoldGateway`, sandbox | **LIVE in the sandbox** (2026-11-09): the customer confirms each hold in Airwallex Drop-in on the dashboard; increment, capture and cancel are real, and reconciliation reads each intent back from Airwallex. `npm run engine:live-cards`. [Run](live-runs/2026-11-09-dashboard-live-airwallex-run.md). |
 | Provider payments (Metal x402) | `MockMetal` | `MetalFloatGateway`, testnet | **LIVE on testnet** (2026-11-01). The engine pays through Metal's x402 facilitator, and providers verify each payment on chain. `npm run live:x402`; passes the adapter contract tests live. **On the dashboard via `npm run engine:live`.** The terminal demo still uses `MockMetal`. |
 | Mandates (Metal) | `MockMandateGateway`: same rules in memory, in front of every payment | `MetalMandateGateway`: real `metal-agent` mandate commands, `engine:live-mandate` | **LIVE on testnet** (2026-11-06): bind, pay, refusals recorded on chain, raise, revoke, and a full dashboard run through the mandate. Offline runs use the SIMULATED mandate. |
-| Clearing (Metal) | `ClearingEmulator` | none | **SIMULATED in every mode.** Not available to builders on testnet. |
+| Clearing (Metal) | `ClearingEmulator` | none | **SIMULATED in every mode.** Metal's testnet clearing is live (correction below); Margin hasn't wired it in yet. |
 | LLM judge / explainer / report text | `TagJudge`, template lines | `LlmJudge`, `Explainer`, `ReportWritingProviders` on Gemini (`gemini-3.5-flash-lite`) or Claude (`claude-opus-5-5`) | **LIVE on Gemini** (2026-11-01 run below). Claude path tested with fakes only. |
 | Dashboard | Next.js 16 app + engine server, all rails mocked (`engine:offline`) | `engine:live`: Metal x402 LIVE, header MODE: MIXED, per-rail badges | **Built; live Metal rail verified in a browser** (2026-11-01, run below). |
 
 **Every buildable rail live in one run (2026-11-09):** `npm run engine:live-full`, with Airwallex holds via Drop-in, x402 payments through a live Metal mandate, and the mandate refusing an unregistered payee on chain. It reconciled to $1.47 with 0 violations. [Run](live-runs/2026-11-09-dashboard-all-live-run.md).
 
-LIVE today: card holds in the Airwallex sandbox through Drop-in (`npm run engine:live-cards`), provider payments on Metal testnet (`npm run live:x402`, and the dashboard via `npm run engine:live`), Metal mandates (`engine:live-mandate`) and the LLM on Gemini. Clearing is SIMULATED (not on testnet). The terminal demo is fully mocked.
+LIVE today: card holds in the Airwallex sandbox through Drop-in (`npm run engine:live-cards`), provider payments on Metal testnet (`npm run live:x402`, and the dashboard via `npm run engine:live`), Metal mandates (`engine:live-mandate`) and the LLM on Gemini. Clearing is SIMULATED: Margin uses its emulator; Metal's live testnet clearing isn't wired in yet. The terminal demo is fully mocked.
 
 ## Metal x402 payments, live (§5.2)
 
@@ -192,6 +192,8 @@ Known issues:
 ## Clearing: why it is emulated
 
 From the hackathon track channel: Metal clearing (per-job deposit, signed running totals, epochs, withdrawal after epoch close) **is not available on testnet for builders**. `metal-agent` 0.3.3 has no clearing commands. Another Kit 12 team has asked Metal whether an emulator is acceptable, and that question is still open.
+
+**Correction, 2026-11-12:** Metal pointed out that clearing *is* available on testnet ([Offer Pay-per-Call Clearing](https://docs.metalntwx.com/agents/clearing)). The facilitator's `/supported` lists a `bajillion` deployment on `eip155:63825` (settlement `0xab3cC15A5Ad1812D0BfEA239bbcF076d2437Ec22`, service `https://clearing-testnet.metalntwx.com`). We relied on the track channel's guidance and never queried `/supported`. Margin still runs the emulator; a live `ClearingPort` adapter on `metal-pay`'s clearing client is the next step.
 
 What the installed SDK shows (read 2026-11-01): `metal-pay@0.3.4` *does* ship a clearing client: `createClearingClient`, `depositToClearing`, `clearingSpendable`, `clearingBalance`, `withdrawFromClearing`, `ClearingRefusal` (`between_epochs`, `insufficient_deposit`, `answer_lost`, `payment_held`), and `openClearingWallet` from `/node`. It signs cumulative payments with **P-256**, needs a Clearing deployment that the facilitator lists in `/supported`, and calls the offer scheme `bajillion`. So a live adapter has a concrete target once Metal opens a testnet deployment to builders.
 

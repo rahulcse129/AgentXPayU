@@ -14,7 +14,7 @@ Airwallex Agentic Banking Hackathon, Starter Kit 12 ("Inference Sourcing Agent")
 
 **What's live.** Card holds run in the Airwallex sandbox, with the card entered in Airwallex Drop-in. Provider payments are x402 on Metal testnet, through a Metal mandate. All of these ran together in one dashboard run that reconciled to the cent: $1.47 matched across the ledger, the chain and Airwallex, with 0 violations. [Read the run](docs/live-runs/2026-11-09-dashboard-all-live-run.md); every transaction is linked.
 
-**What's simulated, and labelled so on screen.** Metal clearing, because it isn't open to builders on testnet. Without keys, every other rail falls back to a simulation with the same rules.
+**What's simulated, and labelled so on screen.** Metal clearing: Margin runs it through an emulator that follows Metal's clearing rules. Metal's live testnet clearing (the `bajillion` x402 scheme) is available, and wiring it into Margin is the next step. Without keys, every other rail falls back to a simulation with the same rules.
 
 **Quickest look, no keys needed (about 3 minutes, plus a 1-minute install):**
 
@@ -199,7 +199,7 @@ If the engine crashes mid-job, the hold stays open at Airwallex. On the next sta
 | Airwallex card holds | **LIVE, sandbox.** Card entered in Drop-in; increment, capture and cancel are real; reconciliation reads each intent back | `MockAirwallex`, same rules |
 | Metal x402 payments | **LIVE, testnet.** Providers verify each payment on chain before delivering | `MockMetal` |
 | Metal mandates | **LIVE, testnet.** Refusals recorded on chain | Simulated mandate, same checks |
-| Metal clearing | SIMULATED in every mode: not open to builders on testnet | `ClearingEmulator` |
+| Metal clearing | SIMULATED in every mode: Margin uses its emulator; Metal's live testnet clearing isn't wired in yet | `ClearingEmulator` |
 | LLM (judge, feed, report) | Gemini (`gemini-3.5-flash-lite`) or Claude | Template text |
 
 The dashboard shows MODE and a LIVE or SIM badge on every rail, column and receipt.

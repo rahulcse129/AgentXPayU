@@ -1,134 +1,122 @@
 # Demo video script
 
-Target length: **about 3½ minutes** (hard cap 4). It's one live dashboard run with every buildable rail live, edited to
-cut the waiting. The narration is in quotes; say it in your own words, but keep the claims exactly as written.
-Each claim is backed by [the all-live run](live-runs/2026-11-09-dashboard-all-live-run.md).
+For ABH Demo Day, following the organisers' recording guidelines: **under 4 minutes (target 3:20)**, the product
+on screen within 30 seconds, one use case end to end, the real product (no slides), and the presenter's face in
+a camera bubble. Send V1 to Dan Kim on Slack before the session.
+
+**The use case:** a business runs AI research jobs for three customers, each paid for on the customer's own card.
+**Before:** an AI agent holding a card can be talked into overpaying, or paying the wrong party.
+**After:** every customer's budget is a card hold the agent can't exceed, every payment passes two locks, and the
+customer is charged exactly what was spent.
+
+Say it in your own words; don't read it word for word. Keep the numbers and claims as written: each is backed by
+[the all-live run](live-runs/2026-11-09-dashboard-all-live-run.md).
+
+## Who says what
+
+| Part | Time | Presenter | Screen |
+|---|---|---|---|
+| The problem | 0:00–0:25 | Kavisha | Dashboard Overview, before the run |
+| The demo | 0:25–2:40 | Rahul | Dashboard, live run |
+| The outcome | 2:40–3:05 | Kavisha | Settlement, then Proof |
+| What's next | 3:05–3:20 | Kavisha | Proof, or the GitHub README |
+
+Plan the two handoffs ("Rahul, show them." / "Kavisha, what did that get us?"). If you record separately, cut on
+those lines.
 
 ## Before you record
 
-1. **Clock:** synced, because Metal refuses payments signed with a skewed clock. On Windows, run
+1. **Recording tool:** Screen Studio or Tella, at 1080p or higher, with your face in a small camera bubble. Camera
+   at eye level, quiet room, natural light, headphones or a decent microphone.
+2. **Clock:** synced, because Metal refuses payments signed with a skewed clock. On Windows, run
    `w32tm /resync /force` from an admin prompt.
-2. **Build and start:**
+3. **Build and start:**
    - `npm run dashboard:build` (once)
-   - terminal 1: `APPROVAL_TIMEOUT_MS=60000 npm run engine:live-full`. Check that it prints `card holds: LIVE`
-     and `Metal rail: LIVE through a Metal mandate`.
+   - terminal 1: `APPROVAL_TIMEOUT_MS=60000 npm run engine:live-full`. Check that it prints `card holds: LIVE` and
+     `Metal rail: LIVE through a Metal mandate`.
    - terminal 2: `npm run dashboard`
-3. **Browser:** open http://localhost:3000 at 1920×1080, zoomed to 110–125% so the text is readable.
-   Close other tabs.
-4. **Second tab:** the Airwallex sandbox dashboard, logged in, on **Payments → Payment intents**. You'll show
-   one captured intent at the end.
-5. **Hide secrets:** keep `.env` and terminal history with keys off screen. The sandbox test card number is
-   public and fine to show.
-6. **Practice once off camera** with `npm run engine:offline`; the flow is the same, with no cards and no
-   testnet spend.
+4. **Browser:** http://localhost:3000, full screen, zoomed to 125% so text reads in the video. Close every other
+   tab except one: the Airwallex sandbox on **Payments → Payment intents**.
+5. **Hide secrets:** keep `.env` and terminals with keys off screen. The sandbox test card number is public.
+6. **Rehearse** once with `npm run engine:offline` (no cards, no testnet spend), timing each part.
 
-A live run takes about 5–6 minutes of real time and spends about 1.5 testnet USDZ. Record it all, then cut.
+A live run takes 5–6 minutes of real time. Record it all, then cut the waiting (card entry for B and C, the
+providers' delays). Cuts are fine; the guidelines ask for clarity, not one take.
 
-## Shot list
+## The script
 
-The dashboard has four views in the left sidebar: **Overview** (job cards, recent activity, fault buttons,
-rails), **Activity** (the full feed with filters, plus the fault buttons), **Settlement** (reconciliation and
-receipts) and **Proof**. **Run scripted demo** is at the top right of every view.
+### 1. The problem (0:00–0:25), Kavisha, on camera over the Overview
 
-### 1. Hook (0:00–0:15)
+> "Hi, I'm Kavisha, and this is Rahul. AI agents are starting to spend money for businesses, and an agent
+> holding a card can be talked into overpaying, or paying the wrong party. We built Margin: an agent that buys
+> AI work for customers, where the money limits live in the card and the payment rail, not in the model.
+> Rahul, show them."
 
-**Screen:** the Overview before the run. The banner at the top names the live rails, and the sidebar shows
-**Mode: MIXED**.
+### 2. The demo (0:25–2:40), Rahul
 
-> "AI agents are starting to spend money for people. Margin is an agent that buys inference for research jobs,
-> and it makes two promises it can't break: never charge a customer more than they agreed to, and never pay a
-> provider more than its published price."
+**0:25 · A customer sets a budget.** Press **Run scripted demo**. The Airwallex Drop-in form opens for Acme
+Research's $1.00. Enter `4035 5010 0000 0008`, `12/30`, CVC `123`, a name, and press Pay. (Wait for the form to
+finish loading before typing.)
 
-### 2. The setup (0:15–0:30)
+> "Let me show you. Three customers each want a research report. Each one approves a budget on their card in
+> Airwallex's own checkout form. It's a hold, not a charge, and card details never touch our server."
 
-**Screen:** scroll down the Overview to the **Rails** table: Airwallex holds LIVE, Metal payments LIVE, Metal
-mandate LIVE, clearing SIMULATED.
+**Edit:** cut B's and C's card entry; keep the three "card hold authorized" lines in view.
 
-> "Three customers each want a research report. Card holds are live in the Airwallex sandbox, and providers
-> are paid live on Metal testnet through a mandate. Clearing is simulated, because it isn't open on testnet
-> yet, and it's labelled that way everywhere."
+**0:55 · The agent buys.** Click **Activity** in the sidebar.
 
-### 3. The customer approves a hold (0:30–0:55)
+> "Now Margin works. For every step it picks the cheapest provider that fits what's left of that job's budget,
+> and pays per request in USDZ on Metal. Every line here is a decision and its reason."
 
-**Action:** press **Run scripted demo**. The Drop-in form appears for Acme Research ($1.00). Wait for the form
-to finish loading, then enter `4035 5010 0000 0008`, `12/30`, CVC `123` and a name, and press Pay.
+As soon as the feed shows "⚠ model-lite slows to ~2.5s under load", press **Trigger overrun (job B ×4)** in
+**Inject faults** (off narration). Before that line, the press does nothing extra.
 
-> "Each customer sets their budget as a card pre-authorization, entered in Airwallex's own Drop-in form, so
-> card details never touch our server. This is a hold, not a charge."
+**1:15 · Lock one.** Click the **Refusals** filter.
 
-**Edit:** show A in full, then speed up or cut B and C's card entry. Keep the feed line
-"card hold authorized" visible for each one.
+> "A rogue provider asks for three times its list price. Our policy code refuses it before a cent moves."
 
-### 4. Sourcing (0:55–1:25)
+**1:30 · Lock two.** Press **Disable our quote check (mandate test)**.
 
-**Screen:** on the Overview, the job cards fill up and **Recent activity** shows lines like
-"buy from model-std for $0.24, the cheapest tier-2 option that fits". Then switch to **Activity** in the
-sidebar: the full feed and the fault buttons sit side by side there, which suits shots 4–7.
-
-**Action (off-narration):** as soon as the feed shows "⚠ model-lite slows to ~2.5s under load", press
-**Trigger overrun (job B ×4)** in the **Inject faults** panel. That guarantees B asks to raise its hold later; without it, B sometimes
-finishes within $0.75. Pressing earlier does nothing extra: before that line, the press merges into the
-scripted overrun.
-
-> "For every step, Margin picks the cheapest provider that fits what's left of that job's budget, and pays per
-> request in USDZ on Metal. Each provider checks the payment on chain before it delivers. When the cheap model
-> slows down, it routes around it."
-
-### 5. Lock one: our policy check (1:25–1:40)
-
-**Screen:** the red feed line "model-bargain blocked (quoted $0.42, list price $0.14)". Click the
-**Refusals** filter above the feed to show only the blocked payments.
-
-> "A rogue provider asks for three times its list price. Our policy check refuses it before a cent moves."
-
-### 6. Lock two: the Metal mandate (1:40–2:05)
-
-**Action:** right after that refusal, press **Disable our quote check (mandate test)** at the bottom of the
-**Inject faults** panel.
-
-**Screen:** a few seconds later, the feed shows "Metal mandate refused … mandate_payee_not_listed … refusal
-recorded on chain", then "our quote check is back on".
-
-> "What if our own check had a bug? Let's turn it off. Now the rogue asks to be paid at an address that isn't
-> registered, and the Metal mandate refuses it on its own. That refusal is recorded on chain. Two independent
+> "But what if our own code had a bug? I'll turn our check off. Now the rogue asks to be paid at an address
+> that isn't on the list, and the Metal mandate refuses it on its own, recorded on chain. Two independent
 > locks."
 
-### 7. Asking before spending more (2:05–2:25)
+**1:55 · Asking before spending more.** B's prompt appears; press **Approve**. C's appears; press **Decline**.
 
-**Action:** the approval prompt for B appears ("raise hold $0.75 → $…"). Press **Approve $…**. Then C's prompt
-appears; press **Decline**.
+> "Birch Capital's job ran over, so Margin asks before going past the hold. They approve: that's a live
+> incremental authorization at Airwallex. Cobalt Labs declines, so Margin trims their report to fit instead of
+> overspending."
 
-> "Birch Capital's job ran over, so Margin asks before spending past the hold. They approve, and that's a
-> live incremental authorization at Airwallex. Cobalt Labs declines, so Margin trims C's plan to fit the
-> budget instead of overspending."
+**2:20 · Settled.** Click **Settlement**. Then switch to the Airwallex tab and open one of the run's intents:
+**Succeeded**, captured less than authorized. Switch back.
 
-### 8. Settle and reconcile (2:25–2:50)
+> "At the end, each card is charged exactly what was spent, and the rest is released. Here's the same hold in
+> Airwallex. Kavisha?"
 
-**Screen:** click **Settlement** in the sidebar (or **View settlement →** in the green banner on the
-Overview). Point at "✓ Every dollar accounted for", the matching columns
-(Ledger paid = Settled on chain = Clearing = Airwallex captured), and the Locks row with the mandate's bind and
-revoke links.
+### 3. The outcome (2:40–3:05), Kavisha, over Settlement then Proof
 
-> "At the end, each hold is captured for exactly what was spent, and the rest is released. Then Margin
-> reconciles: the ledger, every payment re-read from the chain, and every hold re-read from Airwallex all match
-> to the cent. Zero violations."
+Point at "✓ Every dollar accounted for" and the matching columns, then click **Proof**.
 
-### 9. The proof is real (2:50–3:05)
+> "So what changed? The agent never held the purse strings. In this live run, our ledger, the blockchain and
+> Airwallex all matched to the cent, with zero violations. And it's not one lucky run: in 10,000 simulated
+> runs with rogue providers and declines, there were zero overcharges and zero double payments."
 
-**Action:** scroll down Settlement to the receipts. Click one Metal tx link, and the testnet explorer opens on that transaction. Then
-switch to the Airwallex tab and open that job's PaymentIntent: status **Succeeded**, with a captured amount
-below the authorized amount.
+### 4. What's next (3:05–3:20), Kavisha
 
-> "These are real transactions: here's one on the Metal explorer, and here's the hold in Airwallex, captured
-> for less than was authorized."
+> "Next, we'll wire in Metal's live testnet clearing, and add staged captures for long jobs. The code is on
+> GitHub at rahulcse129/AgentXPayU, and runs without any keys. Thanks for watching."
 
-### 10. Close (3:05–3:20)
+## Before you send V1
 
-**Screen:** click **Proof** in the sidebar: the 10,000-run result and the sabotage table, every broken engine
-CAUGHT. Optionally cut to a terminal running `npm run check` and show its final lines.
-
-> "Behind it, 10,000 simulated runs with rogue providers, crashes and declines show 0 overcharges and 0 double
-> payments. Five deliberately broken engines are each caught. Margin: an agent you can trust with a card."
+- [ ] Under 4 minutes (aim for 3:20).
+- [ ] The product is on screen by 0:30.
+- [ ] Only the real dashboard and Airwallex: no slides.
+- [ ] One use case, start to finish: hold → buy → two locks → ask → settle.
+- [ ] Text is readable at 1080p; audio is clear.
+- [ ] Camera at eye level, good light.
+- [ ] Someone who has never seen Margin can follow it without extra context.
+- [ ] It says why it matters and how to try it.
+- [ ] We watched the whole recording once before sending.
 
 ## If something goes wrong while recording
 
@@ -140,9 +128,3 @@ CAUGHT. Optionally cut to a terminal running `npm run check` and show its final 
 | The run fails with "live rail not ready" | Clock skew or a bad RPC. Resync the clock and restart the engine |
 | The engine crashed mid-run | Restart it; the startup sweeper settles the open holds. Then run again |
 | An approval prompt timed out | `APPROVAL_TIMEOUT_MS=60000` gives you 60 s; set it before starting the engine |
-
-## Optional: with the LLM narrating
-
-Run `npm run engine -- --live-airwallex --live-mandate` (it needs `GEMINI_API_KEY` in `.env`). Feed lines
-are rephrased, and each receipt gets a short report. It adds about 17 LLM calls per run. If the free tier
-runs out, the engine falls back to template lines on its own, so the run still works.

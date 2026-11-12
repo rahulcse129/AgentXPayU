@@ -2,9 +2,10 @@
  * Metal clearing behind an interface (Kit 12: per-job deposit, signed running totals,
  * epochs, withdrawal after epoch close).
  *
- * Metal clearing is NOT available to builders on testnet (track channel, see docs/STATUS.md),
- * so the default implementation is ClearingEmulator, and everything it produces is
- * `source: "simulated"`. A live adapter implements the same port; the engine does not change.
+ * The implementation today is ClearingEmulator, and everything it produces is
+ * `source: "simulated"`. Metal's testnet clearing is live (scheme `bajillion`, client in
+ * @metalntwx/metal-pay; see docs/STATUS.md); a live adapter implements this same port, and the
+ * engine does not change.
  *
  * Clearing runs beside the x402 rail, not instead of it: each x402 payment the rail settles
  * is also expressed as a signed cumulative total for that (job, payee), and the job's card

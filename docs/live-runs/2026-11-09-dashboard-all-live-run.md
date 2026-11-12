@@ -8,7 +8,7 @@
 | Card holds | **LIVE**: Airwallex sandbox; each customer's card entered in Drop-in (sandbox test Visa) |
 | Provider payments | **LIVE**: x402 on Metal testnet (`eip155:63825`), paid from MetalAccount `0x9819C6c7c14D03fF90e0069873d16CA4BF1386EB` |
 | Mandate | **LIVE**: Metal mandate, 6 registered payees, $3.00 per-payment cap, $1.50 budget |
-| Clearing | SIMULATED (not available on testnet) |
+| Clearing | SIMULATED (Margin's emulator; Metal's live testnet clearing wasn't wired in) |
 | LLM | off (`--no-llm`), so the feed uses the template lines |
 
 ## Result: reconciled, 0 violations

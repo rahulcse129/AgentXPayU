@@ -6,7 +6,7 @@
  * LIVE:      provider payments (MetalFloatGateway → Metal's x402 facilitator, USDZ on eip155:63825),
  *            and the providers' check that they were paid (ChainPaymentVerifier reads each tx).
  * SIMULATED: the card hold (MockAirwallex; the team's Airwallex sandbox has Payments disabled
- *            for its region) and clearing (ClearingEmulator; not available on testnet).
+ *            for its region) and clearing (ClearingEmulator; Metal's live testnet clearing isn't wired in yet).
  *
  * Spends at most FLOAT below (testnet USDZ). After the run every ledger payment is re-read from
  * chain, independently of the gateway, and ledger paid = chain transferred = captured is checked.

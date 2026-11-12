@@ -108,5 +108,5 @@ test("CLEARING_MODE selects the emulator, refuses live, and can be turned off", 
   assert.equal(clearingFromEnv({})?.source, "simulated");
   assert.equal(clearingFromEnv({ CLEARING_MODE: "emulator" })?.source, "simulated");
   assert.equal(clearingFromEnv({ CLEARING_MODE: "off" }), undefined);
-  assert.throws(() => clearingFromEnv({ CLEARING_MODE: "live" }), /not available to builders on testnet/);
+  assert.throws(() => clearingFromEnv({ CLEARING_MODE: "live" }), /not built yet/);
 });

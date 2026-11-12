@@ -129,7 +129,7 @@ export function createEngineServer(
           : live
             ? { rail: "Metal mandates", source: "off", detail: "This mode pays x402 straight from the agent wallet. Use engine:live-mandate for the on-chain second lock." }
             : { rail: "Metal mandates", source: "simulated", detail: "MockMandateGateway: the same payee allowlist, cap and budget rules, in memory, in front of every payment" },
-        { rail: "Metal clearing", source: "simulated", detail: "ClearingEmulator: not available to builders on testnet" },
+        { rail: "Metal clearing", source: "simulated", detail: "ClearingEmulator, following Metal's clearing rules. Metal's live testnet clearing is not wired into Margin yet." },
         llm
           ? { rail: "LLM (judge, feed, report)", source: "live", detail: `${llmProviderFromEnv(env)} ${llm.model}; never sees prices or holds` }
           : { rail: "LLM (judge, feed, report)", source: "off", detail: "no key: tag judge and template lines" },

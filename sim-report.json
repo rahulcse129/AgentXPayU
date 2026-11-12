@@ -40,7 +40,7 @@
   },
   "clearing": {
     "source": "simulated",
-    "note": "Metal clearing is not available on testnet; ClearingEmulator follows the Kit 12 rules.",
+    "note": "Margin runs Metal clearing through ClearingEmulator, which follows the Kit 12 rules; the live testnet deployment is not wired in yet.",
     "totalsSigned": 143996,
     "redemptions": 123312,
     "redeemedMicros": 6568770000,

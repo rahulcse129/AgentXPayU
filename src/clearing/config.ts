@@ -16,7 +16,7 @@ export function clearingFromEnv(env: NodeJS.ProcessEnv = process.env): ClearingP
   if (mode === "emulator") return new ClearingEmulator(new Eip712Signer(EMULATOR_TEST_KEY));
   if (mode === "live") {
     throw new Error(
-      "CLEARING_MODE=live: Metal clearing is not available to builders on testnet (see docs/STATUS.md). Use CLEARING_MODE=emulator.",
+      "CLEARING_MODE=live is not built yet: Margin has only the emulator. Metal's testnet clearing (scheme bajillion) is available; see docs/STATUS.md. Use CLEARING_MODE=emulator.",
     );
   }
   throw new Error(`unknown CLEARING_MODE ${mode}`);

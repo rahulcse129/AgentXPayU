@@ -56,7 +56,7 @@ Margin runs AI research jobs and buys every paid step from whichever provider fi
 | Airwallex card holds | LIVE, sandbox (Drop-in, increment, capture, cancel) |
 | Metal x402 payments | LIVE, testnet |
 | Metal mandates | LIVE, testnet |
-| Metal clearing | SIMULATED: not open to builders on testnet; our emulator enforces the same finality rule |
+| Metal clearing | SIMULATED: Margin uses its emulator, which enforces the same finality rule; Metal's live testnet clearing isn't wired in yet |
 
 ## Challenges
 
