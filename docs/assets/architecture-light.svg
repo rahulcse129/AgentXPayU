@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 1000" width="980" height="1000" role="img" aria-label="Margin architecture in four layers: dashboard, engine, payment rails, providers">
+<style>
+  text { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif; }
+  .bl { font-size: 13px; font-weight: 700; fill: #14161c; }
+  .bs { font-size: 10.5px; fill: #14161c; opacity: .78; }
+  .tl { font-size: 13px; font-weight: 600; fill: #1b1d24; }
+  .tm { font-size: 12px; fill: #5b6170; }
+  .flow { fill: none; stroke: #9aa1b0; stroke-width: 2; stroke-dasharray: 7 6; animation: dash 1.1s linear infinite; }
+  .flow-ok { fill: none; stroke: #3fae6c; stroke-width: 2.2; stroke-dasharray: 7 6; animation: dash 1.1s linear infinite; }
+  .flow-bad { fill: none; stroke: #e5584d; stroke-width: 2.2; stroke-dasharray: 4 5; }
+  .vert { fill: none; stroke: #9aa1b0; stroke-width: 1.6; stroke-dasharray: 4 5; animation: dash 1.4s linear infinite; }
+  @keyframes dash { to { stroke-dashoffset: -26; } }
+  @media (prefers-reduced-motion: reduce) { .flow, .flow-ok, .vert { animation: none; } }
+  .lay { font-size: 17px; font-weight: 700; fill: #1b1d24; }
+  .vert-card { fill: none; stroke: #2fae9c; stroke-width: 2; stroke-dasharray: 4 5; animation: dash 1.4s linear infinite; }
+</style>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#9aa1b0"/>
+  </marker>
+  <marker id="arrowok" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#3fae6c"/>
+  </marker>
+</defs>
+<polygon points="270.7,652.3 831.9,976.3 831.9,965.5 270.7,641.5" fill="#dcdfe6" stroke="#c3c8d2" stroke-width="1"/>
+<polygon points="933.2,917.8 831.9,976.3 831.9,965.5 933.2,907.0" fill="#cdd1da" stroke="#c3c8d2" stroke-width="1"/>
+<polygon points="372.0,583.0 933.2,907.0 831.9,965.5 270.7,641.5" fill="#eef0f4" stroke="#c3c8d2" stroke-width="1"/>
+<polygon points="298.0,643.8 383.7,693.2 383.7,664.5 298.0,615.0" fill="#55c27f" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="461.6,648.2 383.7,693.2 383.7,664.5 461.6,619.5" fill="#3e9e64" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="375.9,570.0 461.6,619.5 383.7,664.5 298.0,615.0" fill="#a6e8bd" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<text x="379.8" y="621.2" text-anchor="middle" class="bl">model-lite</text>
+<polygon points="407.1,706.8 492.8,756.2 492.8,727.5 407.1,678.0" fill="#55c27f" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="570.8,711.2 492.8,756.2 492.8,727.5 570.8,682.5" fill="#3e9e64" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="485.0,633.0 570.8,682.5 492.8,727.5 407.1,678.0" fill="#a6e8bd" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<text x="488.9" y="684.2" text-anchor="middle" class="bl">model-std</text>
+<polygon points="516.2,769.8 601.9,819.2 601.9,790.5 516.2,741.0" fill="#55c27f" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="679.9,774.2 601.9,819.2 601.9,790.5 679.9,745.5" fill="#3e9e64" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="594.1,696.0 679.9,745.5 601.9,790.5 516.2,741.0" fill="#a6e8bd" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<text x="598.0" y="747.2" text-anchor="middle" class="bl">search</text>
+<polygon points="625.3,832.8 711.0,882.2 711.0,853.5 625.3,804.0" fill="#55c27f" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="789.0,837.2 711.0,882.2 711.0,853.5 789.0,808.5" fill="#3e9e64" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="703.3,759.0 789.0,808.5 711.0,853.5 625.3,804.0" fill="#a6e8bd" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<text x="707.2" y="810.2" text-anchor="middle" class="bl">data</text>
+<polygon points="734.4,895.8 820.2,945.2 820.2,916.5 734.4,867.0" fill="#e8645a" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="898.1,900.2 820.2,945.2 820.2,916.5 898.1,871.5" fill="#c24a41" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="812.4,822.0 898.1,871.5 820.2,916.5 734.4,867.0" fill="#ffaaa3" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<text x="816.3" y="873.2" text-anchor="middle" class="bl">rogue</text>
+<text x="252.7" y="642.9" text-anchor="end" class="lay">Providers</text><text x="252.7" y="659.9" text-anchor="end" class="tm">paid per request, verify on chain</text>
+<path d="M714.9,724.3 L714.9,842.2" class="vert" marker-end="url(#arrow)"/>
+<polygon points="270.7,494.8 831.9,818.8 831.9,808.0 270.7,484.0" fill="#dcdfe6" stroke="#c3c8d2" stroke-width="1"/>
+<polygon points="933.2,760.3 831.9,818.8 831.9,808.0 933.2,749.5" fill="#cdd1da" stroke="#c3c8d2" stroke-width="1"/>
+<polygon points="372.0,425.5 933.2,749.5 831.9,808.0 270.7,484.0" fill="#eef0f4" stroke="#c3c8d2" stroke-width="1"/>
+<polygon points="298.0,486.2 477.2,589.8 477.2,553.8 298.0,450.2" fill="#3fb7a5" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="555.2,544.8 477.2,589.8 477.2,553.8 555.2,508.8" fill="#2c9384" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="375.9,405.2 555.2,508.8 477.2,553.8 298.0,450.2" fill="#8fe0d3" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<text x="426.6" y="476.5" text-anchor="middle" class="bl">Airwallex</text>
+<text x="426.6" y="491.5" text-anchor="middle" class="bs">hold · raise · capture · cancel</text>
+<polygon points="508.4,607.8 617.5,670.8 617.5,624.0 508.4,561.0" fill="#e9a43c" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="695.5,625.8 617.5,670.8 617.5,624.0 695.5,579.0" fill="#c7832a" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="586.3,516.0 695.5,579.0 617.5,624.0 508.4,561.0" fill="#ffd28a" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<text x="601.9" y="567.0" text-anchor="middle" class="bl">Metal mandate</text>
+<text x="601.9" y="582.0" text-anchor="middle" class="bs">payees · cap · budget</text>
+<polygon points="633.1,679.8 734.4,738.2 734.4,711.2 633.1,652.8" fill="#e9a43c" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="812.4,693.2 734.4,738.2 734.4,711.2 812.4,666.2" fill="#c7832a" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="711.0,607.8 812.4,666.2 734.4,711.2 633.1,652.8" fill="#ffd28a" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<text x="722.7" y="656.5" text-anchor="middle" class="bl">USDZ via x402</text>
+<text x="722.7" y="671.5" text-anchor="middle" class="bs">one nonce per buy</text>
+<polygon points="750.0,747.2 835.8,796.8 835.8,773.4 750.0,723.9" fill="#c9cdd6" stroke="rgba(0,0,0,.18)" stroke-width="1" stroke-dasharray="5 4"/>
+<polygon points="913.7,751.8 835.8,796.8 835.8,773.4 913.7,728.4" fill="#b7bcc7" stroke="rgba(0,0,0,.18)" stroke-width="1" stroke-dasharray="5 4"/>
+<polygon points="828.0,678.9 913.7,728.4 835.8,773.4 750.0,723.9" fill="#e4e6eb" stroke="rgba(0,0,0,.18)" stroke-width="1" stroke-dasharray="5 4"/>
+<text x="831.9" y="723.1" text-anchor="middle" class="bl">Clearing</text>
+<text x="831.9" y="738.1" text-anchor="middle" class="bs">SIMULATED</text>
+<path d="M340.8,161.8 L340.8,461.5" class="vert-card" marker-end="url(#arrow)"/>
+<path d="M656.5,630.2 L672.1,639.2" class="vert" marker-end="url(#arrow)"/>
+<text x="252.7" y="485.4" text-anchor="end" class="lay">Payment rails</text><text x="252.7" y="502.4" text-anchor="end" class="tm">where money moves</text>
+<path d="M574.6,422.8 L527.9,515.5" class="vert" marker-end="url(#arrow)"/>
+<path d="M485.0,393.6 L485.0,513.2" class="vert" marker-end="url(#arrow)"/>
+<path d="M605.8,485.8 L605.8,594.7" class="vert" marker-end="url(#arrow)"/>
+<polygon points="270.7,328.3 831.9,652.3 831.9,641.5 270.7,317.5" fill="#dcdfe6" stroke="#c3c8d2" stroke-width="1"/>
+<polygon points="933.2,593.8 831.9,652.3 831.9,641.5 933.2,583.0" fill="#cdd1da" stroke="#c3c8d2" stroke-width="1"/>
+<polygon points="372.0,259.0 933.2,583.0 831.9,641.5 270.7,317.5" fill="#eef0f4" stroke="#c3c8d2" stroke-width="1"/>
+<polygon points="298.0,319.8 379.8,367.0 379.8,341.8 298.0,294.6" fill="#9ba3b3" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="457.7,322.0 379.8,367.0 379.8,341.8 457.7,296.8" fill="#808899" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="375.9,249.6 457.7,296.8 379.8,341.8 298.0,294.6" fill="#cfd4de" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<text x="377.8" y="292.7" text-anchor="middle" class="bl">LLM judge</text>
+<text x="377.8" y="307.7" text-anchor="middle" class="bs">scores only</text>
+<polygon points="399.3,378.2 492.8,432.2 492.8,405.2 399.3,351.2" fill="#9ba3b3" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="570.8,387.2 492.8,432.2 492.8,405.2 570.8,360.2" fill="#808899" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="477.2,306.2 570.8,360.2 492.8,405.2 399.3,351.2" fill="#cfd4de" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<text x="485.0" y="352.8" text-anchor="middle" class="bl">Sweeper</text>
+<text x="485.0" y="367.8" text-anchor="middle" class="bs">after a crash</text>
+<polygon points="508.4,441.2 633.1,513.2 633.1,464.6 508.4,392.6" fill="#7a66f7" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="711.0,468.2 633.1,513.2 633.1,464.6 711.0,419.6" fill="#5f4bdb" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="586.3,347.6 711.0,419.6 633.1,464.6 508.4,392.6" fill="#a99dff" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<text x="609.7" y="403.1" text-anchor="middle" class="bl">Orchestrator</text>
+<text x="609.7" y="418.1" text-anchor="middle" class="bs">plans, buys, settles</text>
+<polygon points="648.7,522.2 742.2,576.2 742.2,536.6 648.7,482.6" fill="#7a66f7" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="820.2,531.2 742.2,576.2 742.2,536.6 820.2,491.6" fill="#5f4bdb" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="726.6,437.6 820.2,491.6 742.2,536.6 648.7,482.6" fill="#a99dff" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<text x="734.4" y="484.1" text-anchor="middle" class="bl">Policy</text>
+<text x="734.4" y="499.1" text-anchor="middle" class="bs">pure functions</text>
+<polygon points="757.8,585.2 835.8,630.2 835.8,583.5 757.8,538.5" fill="#9ba3b3" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="913.7,585.2 835.8,630.2 835.8,583.5 913.7,538.5" fill="#808899" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="835.8,493.4 913.7,538.5 835.8,583.5 757.8,538.5" fill="#cfd4de" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<text x="835.8" y="535.5" text-anchor="middle" class="bl">Ledger</text>
+<text x="835.8" y="550.5" text-anchor="middle" class="bs">SQLite</text>
+<text x="252.7" y="318.9" text-anchor="end" class="lay">Margin engine</text><text x="252.7" y="335.9" text-anchor="end" class="tm">decides every payment in code</text>
+<path d="M687.7,299.1 L687.7,419.6" class="vert" marker-end="url(#arrow)"/>
+<polygon points="270.7,148.3 831.9,472.3 831.9,461.5 270.7,137.5" fill="#dcdfe6" stroke="#c3c8d2" stroke-width="1"/>
+<polygon points="933.2,413.8 831.9,472.3 831.9,461.5 933.2,403.0" fill="#cdd1da" stroke="#c3c8d2" stroke-width="1"/>
+<polygon points="372.0,79.0 933.2,403.0 831.9,461.5 270.7,137.5" fill="#eef0f4" stroke="#c3c8d2" stroke-width="1"/>
+<polygon points="298.0,139.8 477.2,243.2 477.2,207.2 298.0,103.8" fill="#3fb7a5" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="555.2,198.2 477.2,243.2 477.2,207.2 555.2,162.2" fill="#2c9384" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="375.9,58.8 555.2,162.2 477.2,207.2 298.0,103.8" fill="#8fe0d3" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<text x="426.6" y="130.0" text-anchor="middle" class="bl">Airwallex Drop-in</text>
+<text x="426.6" y="145.0" text-anchor="middle" class="bs">customer enters card</text>
+<polygon points="508.4,261.2 835.8,450.2 835.8,414.2 508.4,225.2" fill="#5f99f2" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="913.7,405.2 835.8,450.2 835.8,414.2 913.7,369.2" fill="#477bd1" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<polygon points="586.3,180.2 913.7,369.2 835.8,414.2 508.4,225.2" fill="#9cc2ff" stroke="rgba(0,0,0,.18)" stroke-width="1"/>
+<text x="711.0" y="294.2" text-anchor="middle" class="bl">Dashboard</text>
+<text x="711.0" y="309.2" text-anchor="middle" class="bs">Overview · Activity · Settlement · Proof</text>
+<text x="252.7" y="138.9" text-anchor="end" class="lay">Customer &amp; dashboard</text><text x="252.7" y="155.9" text-anchor="end" class="tm">what a person sees and approves</text>
+</svg>
