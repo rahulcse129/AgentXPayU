@@ -181,6 +181,8 @@ Four layers, top to bottom. The dashed connectors are the flows:
 
 **What's live.** Card holds run in the Airwallex sandbox, with the card entered in Airwallex Drop-in. Provider payments are x402 on Metal testnet, through a Metal mandate. All of these ran together in one dashboard run that reconciled to the cent: $1.47 matched across the ledger, the chain and Airwallex, with 0 violations. [Read the run](docs/live-runs/2026-11-09-dashboard-all-live-run.md); every transaction is linked.
 
+**For Live Run Walkthrough** If you guys want Live Walkthrough then please look for this Video: [Link](https://www.loom.com/share/6a9085c2b415408f96ca770a2c2210be);
+
 **What's simulated, and labelled so on screen.** Metal clearing: Margin runs it through an emulator that follows Metal's clearing rules. Metal's live testnet clearing (the `bajillion` x402 scheme) is available, and wiring it into Margin is the next step. Without keys, every other rail falls back to a simulation with the same rules.
 
 **Quickest look, no keys needed** (about 3 minutes, plus a 1-minute install):
