@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080" role="img" aria-label="Margin's money map: the customer's budget is a card hold on Airwallex, off-chain; providers are paid per call in USDZ on Metal, on-chain; the card is charged exactly what was spent.">
+<style>
+  text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; }
+  .title { font-size: 58px; font-weight: 800; fill: #1b1d24; letter-spacing: -1px; }
+  .lede { font-size: 28px; fill: #5b6170; }
+  .zone { font-size: 22px; font-weight: 800; letter-spacing: 3px; }
+  .zsub { font-size: 21px; fill: #5b6170; }
+  .h { font-size: 30px; font-weight: 800; fill: #1b1d24; }
+  .s { font-size: 21px; fill: #3d4250; }
+  .num { font-size: 26px; font-weight: 800; fill: #ffffff; }
+  .step { font-size: 24px; font-weight: 700; fill: #1b1d24; }
+  .stepsub { font-size: 20px; fill: #5b6170; }
+  .foot { font-size: 25px; font-weight: 600; fill: #1b1d24; }
+  .flow { fill: none; stroke-width: 5; stroke-dasharray: 14 10; animation: dash 1.2s linear infinite; }
+  @keyframes dash { to { stroke-dashoffset: -48; } }
+</style>
+<defs>
+  <marker id="aT" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2c9384"/></marker>
+  <marker id="aA" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#c7832a"/></marker>
+  <marker id="aV" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5f4bdb"/></marker>
+</defs>
+<rect width="1920" height="1080" fill="#ffffff"/>
+
+<!-- title -->
+<text x="110" y="120" class="title">Margin: an AI agent that spends inside your card hold</text>
+<text x="110" y="170" class="lede">It buys AI work for customers. The budget lives on the card; the payments live on-chain.</text>
+
+<!-- zones -->
+<rect x="80" y="230" width="760" height="560" rx="28" fill="#e9f8f5" stroke="#8fe0d3" stroke-width="2"/>
+<text x="120" y="282" class="zone" fill="#2c9384">CARD RAILS · OFF-CHAIN</text>
+<text x="120" y="316" class="zsub">Airwallex, in US dollars</text>
+
+<rect x="1080" y="230" width="760" height="560" rx="28" fill="#fff6e6" stroke="#ffd28a" stroke-width="2"/>
+<text x="1120" y="282" class="zone" fill="#b97a1c">PAYMENTS · ON-CHAIN</text>
+<text x="1120" y="316" class="zsub">Metal testnet, in USDZ stablecoin</text>
+
+<!-- customer + card (left) -->
+<g transform="translate(130,370)">
+  <rect x="10" y="10" width="300" height="190" rx="22" fill="#2c9384"/>
+  <rect width="300" height="190" rx="22" fill="#3fb7a5"/>
+  <rect x="26" y="40" width="54" height="40" rx="8" fill="#ffd28a"/>
+  <text x="26" y="132" class="h" fill="#ffffff" style="fill:#ffffff">Customer's card</text>
+  <text x="26" y="166" class="s" style="fill:#e9fffb">Hold: $1.00 budget</text>
+</g>
+<g transform="translate(470,370)">
+  <text x="0" y="40" class="h">Airwallex</text>
+  <text x="0" y="78" class="s">• places the hold (not a charge)</text>
+  <text x="0" y="110" class="s">• raises it if the customer agrees</text>
+  <text x="0" y="142" class="s">• captures exactly what was spent</text>
+  <text x="0" y="174" class="s">• releases the rest</text>
+</g>
+<text x="130" y="640" class="s">Card details go straight from Airwallex's</text>
+<text x="130" y="670" class="s">checkout to Airwallex, never through Margin.</text>
+<text x="130" y="730" class="s" style="font-weight:700;fill:#2c9384">No crypto touches the customer.</text>
+
+<!-- Margin in the middle -->
+<g transform="translate(860,400)">
+  <path d="M0,40 L100,0 L200,40 L200,190 L100,230 L0,190 z" fill="#5f4bdb"/>
+  <path d="M0,40 L100,80 L200,40 L100,0 z" fill="#a99dff"/>
+  <path d="M0,40 L100,80 L100,230 L0,190 z" fill="#7a66f7"/>
+  <text x="100" y="270" text-anchor="middle" class="h">Margin</text>
+  <text x="100" y="302" text-anchor="middle" class="s">the AI agent</text>
+</g>
+
+<!-- providers (right) -->
+<g transform="translate(1130,360)">
+  <text x="0" y="40" class="h">Metal</text>
+  <text x="0" y="78" class="s">• pays each AI step per request (x402)</text>
+  <text x="0" y="110" class="s">• in USDZ, settled on-chain</text>
+  <text x="0" y="142" class="s">• mandate refuses unknown payees</text>
+</g>
+<g transform="translate(1130,540)">
+  <rect width="190" height="74" rx="16" fill="#55c27f"/><text x="95" y="47" text-anchor="middle" class="h" style="font-size:24px;fill:#ffffff">AI model</text>
+  <rect x="210" width="190" height="74" rx="16" fill="#55c27f"/><text x="305" y="47" text-anchor="middle" class="h" style="font-size:24px;fill:#ffffff">Web search</text>
+  <rect x="420" width="190" height="74" rx="16" fill="#55c27f"/><text x="515" y="47" text-anchor="middle" class="h" style="font-size:24px;fill:#ffffff">Data</text>
+  <text x="0" y="128" class="s">AI providers check every payment on-chain</text>
+  <text x="0" y="158" class="s">before they deliver.</text>
+</g>
+<text x="1130" y="730" class="s" style="font-weight:700;fill:#b97a1c">No card touches the chain.</text>
+
+<!-- flows -->
+<path d="M300,362 C 430,296 760,300 858,428" class="flow" stroke="#2c9384" marker-end="url(#aT)"/>
+<path d="M1064,520 C 1092,526 1106,544 1122,560" class="flow" stroke="#c7832a" marker-end="url(#aA)"/>
+<path d="M858,592 C 760,602 560,602 452,552" class="flow" stroke="#5f4bdb" marker-end="url(#aV)"/>
+<g><circle cx="600" cy="318" r="22" fill="#2c9384"/><text x="600" y="327" text-anchor="middle" class="num" style="font-size:22px">1</text></g>
+<g><circle cx="1098" cy="466" r="22" fill="#c7832a"/><text x="1098" y="475" text-anchor="middle" class="num" style="font-size:22px">2</text></g>
+<g><circle cx="660" cy="598" r="22" fill="#5f4bdb"/><text x="660" y="607" text-anchor="middle" class="num" style="font-size:22px">3</text></g>
+
+<!-- steps -->
+<g transform="translate(110,850)">
+  <circle cx="26" cy="26" r="26" fill="#2c9384"/><text x="26" y="35" text-anchor="middle" class="num">1</text>
+  <text x="70" y="22" class="step">Customer approves a budget</text>
+  <text x="70" y="52" class="stepsub">a card hold on Airwallex</text>
+</g>
+<g transform="translate(700,850)">
+  <circle cx="26" cy="26" r="26" fill="#c7832a"/><text x="26" y="35" text-anchor="middle" class="num">2</text>
+  <text x="70" y="22" class="step">Agent pays providers per call</text>
+  <text x="70" y="52" class="stepsub">USDZ on Metal, through two locks</text>
+</g>
+<g transform="translate(1290,850)">
+  <circle cx="26" cy="26" r="26" fill="#5f4bdb"/><text x="26" y="35" text-anchor="middle" class="num">3</text>
+  <text x="70" y="22" class="step">Card charged exactly what was spent</text>
+  <text x="70" y="52" class="stepsub">the rest of the hold is released</text>
+</g>
+
+<rect x="80" y="960" width="1760" height="74" rx="37" fill="#f1effe"/>
+<text x="960" y="1006" text-anchor="middle" class="foot">Margin fronts the on-chain payments and reconciles both sides to the cent: ledger = chain = card.</text>
+</svg>
