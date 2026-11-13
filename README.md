@@ -10,13 +10,16 @@
   <img alt="158 tests passing" src="https://img.shields.io/badge/tests-158_passing-5b3df5?style=flat-square">
   <img alt="10,000 simulated runs, 0 overcharges" src="https://img.shields.io/badge/simulation-10%2C000_runs_·_0_overcharges-5b3df5?style=flat-square">
   <img alt="TypeScript on Node 22" src="https://img.shields.io/badge/TypeScript-Node_22-3178c6?style=flat-square">
+  <a href="https://margin.rahulsbuild.tech"><img alt="Deployed on AWS: margin.rahulsbuild.tech" src="https://img.shields.io/badge/deployed-AWS_·_margin.rahulsbuild.tech-e9a43c?style=flat-square"></a>
 </p>
 
 <p align="center">
+  <a href="https://margin.rahulsbuild.tech"><b>🌐 Live site</b></a> ·
   <a href="#for-judges"><b>For judges</b></a> ·
   <a href="#see-it"><b>Screenshots</b></a> ·
   <a href="#how-a-job-flows"><b>How it works</b></a> ·
   <a href="#architecture"><b>Architecture</b></a> ·
+  <a href="#running-on-aws"><b>AWS deployment</b></a> ·
   <a href="docs/live-runs/2026-11-09-dashboard-all-live-run.md"><b>Live-run evidence</b></a> ·
   <a href="https://www.loom.com/share/6a9085c2b415408f96ca770a2c2210be"><b>▶ Walkthrough video</b></a>
 </p>
@@ -159,6 +162,8 @@ Four layers, top to bottom. The dashed connectors are the flows:
 - **Payment rails.** The orchestrator places, raises and captures holds on **Airwallex**. Approved payments go through the **Metal mandate** as **USDZ over x402**. **Clearing** runs on Margin's emulator for now.
 - **Providers.** They are paid per request and check each payment on chain before delivering. The **rogue** provider exists to prove the locks.
 
+The dashboard and engine run on AWS behind a login; the next section shows how.
+
 <details>
 <summary><b>Where each part lives in the code</b></summary>
 
@@ -174,14 +179,39 @@ Four layers, top to bottom. The dashed connectors are the flows:
 | Engine server and crash recovery | [src/server/](src/server/) |
 | Dashboard | [apps/dashboard/](apps/dashboard/) |
 | 10,000-run simulation and sabotage proof | [src/sim/](src/sim/) |
+| AWS infrastructure (CDK): the app stack and the GitHub deploy role | [infra/](infra/) |
+| Container images and the engine's start-up script | [Dockerfile.engine](Dockerfile.engine), [apps/dashboard/Dockerfile](apps/dashboard/Dockerfile), [deploy/](deploy/) |
+| Continuous deployment | [.github/workflows/deploy.yml](.github/workflows/deploy.yml) |
 
 </details>
+
+## Running on AWS
+
+Margin is deployed at **[margin.rahulsbuild.tech](https://margin.rahulsbuild.tech)**. The same dashboard and engine as the local build run in AWS `ap-south-1`, behind a login.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/aws-deployment-dark.svg">
+  <img alt="Margin on AWS: Route 53 and an HTTPS load balancer with a Cognito login in front of one ECS Fargate task running the dashboard and engine, with EFS, Secrets Manager, CloudWatch and ECR; the engine reaches Airwallex and Metal through a NAT gateway; GitHub Actions deploys with CDK through an OIDC role" src="docs/assets/aws-deployment-light.svg" width="100%">
+</picture>
+
+- **Front door.** Route 53 points `margin.rahulsbuild.tech` at an **Application Load Balancer** with an ACM certificate. Every page *and* every API call must pass a **Cognito login** first. The load balancer sends `/api/*` to the engine and everything else to the dashboard, so both share one HTTPS origin, live event stream included.
+- **One task, on purpose.** Dashboard and engine run as two containers in **one ECS Fargate task** in private subnets. The engine keeps a run's state in memory and is the only writer of its SQLite ledgers, so the service never scales out. A deploy stops the old task before starting the new one.
+- **Crash safety survives restarts.** Each live run's ledger lives on **EFS**. When a task restarts, the startup sweeper reads every ledger and captures or cancels any card hold a crash left open, the same as on a laptop.
+- **No keys in code, images or CI.** Rail keys live in **Secrets Manager** (`margin/app`) and reach the engine only at start-up. GitHub Actions deploys through an **OIDC role** that only this repo's `main` branch can assume, so no AWS keys are stored in GitHub.
+- **Live or simulated, labelled either way.** The engine's mode (`engine:offline` up to `engine:live-full`) is a deploy setting. The dashboard shows MODE and a LIVE or SIM badge on every rail, exactly as it does locally.
+- **Shipping.** Every push to `main` runs `npm run check` (typecheck, 158 tests, the 10,000-run simulation and the sabotage proof) and deploys only if it passes.
+
+**Logging in.** The site has no public sign-up. Judges get a login in the hackathon submission form, or ask the team for one. Logins aren't published here because the deployed engine can run against the live rails.
+
+Setting it up in your own AWS account, and switching between modes: [docs/DEPLOY_AWS.md](docs/DEPLOY_AWS.md).
 
 ## For judges
 
 **What's live.** Card holds run in the Airwallex sandbox, with the card entered in Airwallex Drop-in. Provider payments are x402 on Metal testnet, through a Metal mandate. All of these ran together in one dashboard run that reconciled to the cent: $1.47 matched across the ledger, the chain and Airwallex, with 0 violations. [Read the run](docs/live-runs/2026-11-09-dashboard-all-live-run.md); every transaction is linked.
 
 **Live run walkthrough.** Watch Margin run end to end: [video on Loom](https://www.loom.com/share/6a9085c2b415408f96ca770a2c2210be).
+
+**Try it in your browser.** Open **[margin.rahulsbuild.tech](https://margin.rahulsbuild.tech)** and sign in with the login from our submission form. Press **Run scripted demo**, approve B's hold increase and decline C's. The header says which mode is running. In live mode, each customer confirms their hold in Airwallex Drop-in with the sandbox test card `4035 5010 0000 0008`, any future expiry and any CVC. [How it's hosted](#running-on-aws).
 
 **What's simulated, and labelled so on screen.** Metal clearing: Margin runs it through an emulator that follows Metal's clearing rules. Metal's live testnet clearing (the `bajillion` x402 scheme) is available, and wiring it into Margin is the next step. Without keys, every other rail falls back to a simulation with the same rules.
 
@@ -208,7 +238,7 @@ npm run demo      # scripted 3-customer scenario in the terminal, with narration
 
 ## Run the dashboard
 
-Two processes, both production builds:
+Use [the deployed site](#running-on-aws), or run it locally as two processes, both production builds:
 
 ```bash
 npm run dashboard:install && npm run dashboard:build   # once
@@ -271,6 +301,7 @@ The dashboard shows MODE and a LIVE or SIM badge on every rail, column and recei
 | Capture only after clearing is final | [orchestrator.ts `finalizeClearing`](src/engine/orchestrator.ts) |
 | Every hold ends captured or cancelled, even after a crash: the startup sweeper settles holds a crashed run left open | [sweeper.ts](src/ledger/sweeper.ts), [recover.ts](src/server/recover.ts) |
 | Card data never touches our server | [CardModal.tsx](apps/dashboard/components/CardModal.tsx) (Airwallex Drop-in), [airwallex-browser.ts](src/payments/airwallex-browser.ts) |
+| In the cloud: no one reaches the engine without a login, keys stay out of code and images, and only one engine ever runs | [margin-stack.ts](infra/lib/margin-stack.ts) (Cognito on the load balancer, Secrets Manager, `desiredCount: 1`), [entrypoint.mjs](deploy/entrypoint.mjs) |
 
 ## Proof
 

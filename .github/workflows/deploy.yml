@@ -3,6 +3,10 @@ name: Deploy to AWS
 on:
   push:
     branches: [main]
+    # Docs-only changes don't touch the running app: no rebuild, no engine restart.
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
   workflow_dispatch:
 
 # One deploy at a time: the service runs exactly one task.

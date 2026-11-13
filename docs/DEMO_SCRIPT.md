@@ -40,6 +40,13 @@ those lines.
 5. **Hide secrets:** keep `.env` and terminals with keys off screen. The sandbox test card number is public.
 6. **Rehearse** once with `npm run engine:offline` (no cards, no testnet spend), timing each part.
 
+**Or record against the deployed site.** Skip steps 2–3:
+- Set the GitHub variable `MARGIN_ENGINE_SCRIPT=engine:live-full` and re-run the **Deploy to AWS** workflow.
+- For a longer approval window, add `APPROVAL_TIMEOUT_MS=60000` to `.env` and run `node deploy/push-secrets.mjs --apply` before deploying.
+- Open https://margin.rahulsbuild.tech, sign in, then follow step 4 with that URL.
+- Show the address bar once, so viewers see it's the hosted site.
+- Switch back to `engine:offline` afterwards.
+
 A live run takes 5–6 minutes of real time. Record it all, then cut the waiting (card entry for B and C, the
 providers' delays). Cuts are fine; the guidelines ask for clarity, not one take.
 

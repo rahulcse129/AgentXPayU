@@ -1,6 +1,6 @@
 # Margin: status
 
-Last updated: 2026-11-09. Submission deadline: 13 November 2026.
+Last updated: 2026-11-14. Submission deadline: 13 November 2026.
 
 ## Live vs simulated, today
 
@@ -12,6 +12,7 @@ Last updated: 2026-11-09. Submission deadline: 13 November 2026.
 | Clearing (Metal) | `ClearingEmulator` | none | **SIMULATED in every mode.** Metal's testnet clearing is live (correction below); Margin hasn't wired it in yet. |
 | LLM judge / explainer / report text | `TagJudge`, template lines | `LlmJudge`, `Explainer`, `ReportWritingProviders` on Gemini (`gemini-3.5-flash-lite`) or Claude (`claude-opus-5-5`) | **LIVE on Gemini** (2026-11-01 run below). Claude path tested with fakes only. |
 | Dashboard | Next.js 16 app + engine server, all rails mocked (`engine:offline`) | `engine:live`: Metal x402 LIVE, header MODE: MIXED, per-rail badges | **Built; live Metal rail verified in a browser** (2026-11-01, run below). |
+| Hosting | Local: `npm run engine:*` + `npm run dashboard` | AWS: https://margin.rahulsbuild.tech, mode picked by `MARGIN_ENGINE_SCRIPT` | **Deployed on AWS** (2026-11-14). A live `engine:live-full` run on the deployed site reconciled. See [Deployment (AWS)](#deployment-aws). |
 
 **Every buildable rail live in one run (2026-11-09):** `npm run engine:live-full`, with Airwallex holds via Drop-in, x402 payments through a live Metal mandate, and the mandate refusing an unregistered payee on chain. It reconciled to $1.47 with 0 violations. [Run](live-runs/2026-11-09-dashboard-all-live-run.md).
 
@@ -123,6 +124,24 @@ The account moved by exactly the 1¢ paid. Steps take about 7–23 s each.
 - Refusals carry Metal's own reason code (`mandate_payee_not_listed`, `mandate_cap_exceeded`, `mandate_revoked`) instead of "refused on chain". The CLI's own word is "not sent", unless the refusal is recorded.
 - Refusals are recorded on chain by default (`--record-refusal`, gas from the owner key; `METAL_RECORD_REFUSALS=0` turns it off).
 - The tx parser now accepts only a whole 64-hex hash; after a revoke the CLI printed a bare `0x`.
+
+## Deployment (AWS)
+
+Deployed 2026-11-14 at **https://margin.rahulsbuild.tech** (AWS `ap-south-1`). Setup and operations: [DEPLOY_AWS.md](DEPLOY_AWS.md).
+
+- **Shape:**
+  - one ECS Fargate task (engine and dashboard containers) behind an HTTPS load balancer
+  - a Cognito login on every page and API call; there's no public sign-up, and logins go to judges through the submission form, never this repo
+  - EFS for the SQLite run ledgers and mandate credentials, and Secrets Manager (`margin/app`) for rail keys
+- **Why one task:** the engine keeps the run in memory and is the only SQLite writer. The service is pinned to `desiredCount: 1`, and a deploy stops the old task before starting the new one.
+- **Deploys:** every push to `main` runs `npm run check`, then `cdk deploy` through an OIDC role limited to this repo's `main` branch.
+  - GitHub's token for this repo uses the immutable-ID subject (`repo:owner@<id>/name@<id>:…`), and the role trusts both formats.
+- **Modes:** the GitHub variable `MARGIN_ENGINE_SCRIPT` picks the engine (`engine:offline` … `engine:live-full`). Keys are copied from `.env` with `node deploy/push-secrets.mjs --apply`.
+- **Verified:**
+  - offline: a scripted run in the browser
+  - `engine:live-full`: Airwallex holds and the Metal mandate both live, reconciled
+  - startup sweeper on EFS: 0 ledgers open on first boot
+- **Not done:** both modes side by side (a second service at a `live.` subdomain); a dashboard toggle between them.
 
 ## What is done
 

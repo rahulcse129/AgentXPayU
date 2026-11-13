@@ -17,3 +17,4 @@ test
 *.db-shm
 demo-events.json
 demo-report.md
+*.md

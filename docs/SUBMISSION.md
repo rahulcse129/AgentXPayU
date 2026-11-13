@@ -1,6 +1,6 @@
 # Submission text (paste-ready)
 
-Updated 2026-11-09. Every claim here is backed by a run in [live-runs/](live-runs/) or a test; keep it that way if you edit.
+Updated 2026-11-14. Every claim here is backed by a run in [live-runs/](live-runs/) or a test; keep it that way if you edit.
 
 ## Project name
 
@@ -48,6 +48,11 @@ Margin runs AI research jobs and buys every paid step from whichever provider fi
 - **Crash safety:** a startup sweeper settles any card hold a crashed run left open. It captures what was spent, or cancels. It was tested live by killing a run mid-flight.
 - **LLM (Gemini or Claude):** scores provider output and writes the narration. It never moves money.
 - **Dashboard:** Next.js. Every rail, column and receipt is labelled LIVE or SIMULATED.
+- **Hosting (AWS):** deployed at https://margin.rahulsbuild.tech.
+  - **Front door:** Route 53 and an HTTPS load balancer with a Cognito login in front of every page and API call.
+  - **Compute:** the dashboard and engine run as one ECS Fargate task.
+  - **Storage:** card-hold ledgers on EFS, so the crash sweeper works across restarts; rail keys in Secrets Manager.
+  - **Deploys:** GitHub Actions with AWS CDK through an OIDC role. Every push runs the full check (tests, the 10,000-run simulation, the sabotage proof) before it deploys.
 
 ## Live vs simulated
 
@@ -67,9 +72,11 @@ Margin runs AI research jobs and buys every paid step from whichever provider fi
 
 ## Links
 
+- Live site: https://margin.rahulsbuild.tech (login required)
+- Judge login: *(type the email and password into the submission form only. Never commit them: this repo is public.)*
 - Code: https://github.com/rahulcse129/AgentXPayU
 - Live-run evidence: https://github.com/rahulcse129/AgentXPayU/tree/main/docs/live-runs
-- Demo video: *(add)*
+- Demo video: https://www.loom.com/share/6a9085c2b415408f96ca770a2c2210be
 
 ## Team
 

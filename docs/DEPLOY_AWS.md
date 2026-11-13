@@ -13,6 +13,13 @@ Secrets Manager         margin/app: one JSON object of engine env vars
 CloudWatch Logs         engine/* and dashboard/* streams
 ```
 
+![Margin on AWS](assets/aws-deployment-light.svg)
+
+**This repo's deployment:**
+- **Site:** https://margin.rahulsbuild.tech, in `ap-south-1`.
+- **Config:** the domain and hosted zone are set in [`infra/cdk.json`](../infra/cdk.json).
+- **Logins:** created by hand in the Cognito user pool. They're never written in this repo.
+
 **Why exactly one task.** The engine keeps its single `DemoSession` in memory, streams it over SSE, and is the
 only writer of the SQLite ledgers. The service never scales out, and deployments stop the old task before the
 new one starts (`minHealthyPercent: 0`, `maxHealthyPercent: 100`), so expect ~1–2 minutes of downtime per deploy.
@@ -47,9 +54,9 @@ Settings → Secrets and variables → Actions → **Variables**:
 |---|---|---|
 | `AWS_DEPLOY_ROLE_ARN` | `arn:aws:iam::…:role/margin-github-deploy` | from step 1 |
 | `AWS_REGION` | `ap-south-1` | the region you bootstrapped |
-| `MARGIN_DOMAIN` | `margin.example.com` | |
-| `MARGIN_ZONE_ID` | `Z0123456789ABC` | Route 53 → Hosted zones |
-| `MARGIN_ZONE_NAME` | `example.com` | |
+| `MARGIN_DOMAIN` | `margin.example.com` | optional: overrides `domainName` in `infra/cdk.json` |
+| `MARGIN_ZONE_ID` | `Z0123456789ABC` | optional: overrides `hostedZoneId` (Route 53 → Hosted zones) |
+| `MARGIN_ZONE_NAME` | `example.com` | optional: overrides `hostedZoneName` |
 | `MARGIN_ENGINE_SCRIPT` | `engine:offline` | optional; see "Engine modes" |
 | `MARGIN_ALLOWED_CIDRS` | `203.0.113.4/32` | optional; restricts the ALB to these IPs |
 
@@ -72,8 +79,11 @@ npx cdk deploy MarginApp -c domainName=margin.example.com -c hostedZoneId=Z01234
 
 1. **Create users.** Cognito console → the user pool in the `UserPoolId` output → Users → Create user. Self sign-up
    is off; only users you create can open the dashboard or call the API.
-2. **Fill in secrets** (only needed for live modes or the LLM). Secrets Manager → `margin/app` → Retrieve secret
-   value → Edit → Plaintext, and save a JSON object of the same variables as `.env.example`:
+2. **Fill in secrets** (only needed for live modes or the LLM). The easy way is
+   `node deploy/push-secrets.mjs` (a dry run that prints key names only), then the same command with `--apply`.
+   It copies the engine keys from your `.env`, including the owner key file's contents. By hand, go to
+   Secrets Manager → `margin/app` → Retrieve secret value → Edit → Plaintext, and save a JSON object of the
+   same variables as `.env.example`:
 
    ```json
    {
