@@ -16,6 +16,7 @@
 <p align="center">
   <a href="https://margin.rahulsbuild.tech"><b>🌐 Live site</b></a> ·
   <a href="#for-judges"><b>For judges</b></a> ·
+  <a href="#why-margin-for-each-award"><b>Awards</b></a> ·
   <a href="#see-it"><b>Screenshots</b></a> ·
   <a href="#how-a-job-flows"><b>How it works</b></a> ·
   <a href="#architecture"><b>Architecture</b></a> ·
@@ -47,6 +48,61 @@ Agents don't just need payment rails; they need **rails with limits**. Margin ke
 | Charging for unused budget | **Capture exactly what was spent**, release the rest, and reconcile against every rail to the cent. |
 
 The AI model scores answers and writes narration. It never chooses an amount or moves money.
+
+## Why Margin, for each award
+
+Every claim below links to code, a test or an on-chain transaction.
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### 🏆 Founder's Choice
+
+**A real business you can run today.**
+- **Agents that buy compute** are a fast-growing kind of spending. Every company letting an agent spend for its customers needs the two promises Margin keeps: never charge past what the customer agreed, never overpay a supplier.
+- **It's a business, not only a demo.** Margin earns on sourcing: the agent shops each step across providers. The Settlement view shows each job's savings against buying everything at premium, and the customer pays only what was used.
+- **It's running now.** [margin.rahulsbuild.tech](#running-on-aws) is on AWS behind a login. Every push runs the full proof before it deploys.
+
+</td>
+<td width="50%" valign="top">
+
+### ⚖️ Judges' Choice
+
+**Rigour you can check yourself.**
+- **Live, to the cent.** Airwallex holds, Metal x402 payments and the mandate ran live in one run, reconciling **$1.47 across the ledger, the chain and Airwallex with 0 violations**. [See the run](docs/live-runs/2026-11-09-dashboard-all-live-run.md).
+- **Proven at scale.** **10,000 simulated runs** check 12 families of invariants with 0 overcharges and 0 double payments. **5 of 5 deliberately broken engines are caught.** Run it yourself with `npm run check`.
+- **Crash-safe.** A run was killed mid-flight, and the startup sweeper captured or cancelled every open hold. The same happens in the cloud, with ledgers on EFS.
+- **Labelled honestly.** Every rail is LIVE or SIM on screen. Clearing is simulated and says so everywhere.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### 💳 Visa Award: Visa + Airwallex
+
+**The customer's Visa card is the spending limit.**
+- **Every budget is a Visa pre-authorization** made with Airwallex PaymentIntents (`pre_auth`, `auto_capture: false`). The customer enters the card in **Airwallex Drop-in**, so card data never reaches us. The live runs used Airwallex's sandbox test Visa. [Code](src/payments/airwallex.ts), [run](docs/live-runs/2026-11-09-dashboard-live-airwallex-run.md).
+- **Going over budget uses incremental authorization**, which Airwallex supports on Visa and Mastercard. The customer approves in the dashboard before a cent is spent past the hold. If they decline, the plan shrinks to fit.
+- **Charged only for what was used.** Capture is exactly the spend, floored to the cent, and the rest of the hold is released. A job that spent nothing is cancelled. Every call uses a deterministic `request_id`, so retries never double-charge.
+
+<sub>We use Visa through the card network and Airwallex's acceptance APIs. We don't call Visa's own APIs.</sub>
+
+</td>
+<td width="50%" valign="top">
+
+### ⛓️ Metal Award: Metal + Airwallex
+
+**Metal is a second lock that holds even if our code fails.**
+- **x402 on Metal testnet, live.** Every step is paid per request in USDZ through Metal's facilitator. The EIP-3009 nonce comes from the purchase key, so the chain itself refuses to pay anything twice. Providers check each payment on chain before delivering. [metal.ts](src/payments/metal.ts), [verify.ts](src/providers/verify.ts).
+- **Mandates, live.** Each run binds a mandate with a payee allowlist, a per-payment cap and a budget. The budget is raised after Airwallex approves an increase, and the mandate is revoked at the end. With our own check switched off, the mandate still refused a rogue payee, [recorded on chain](https://testnet.metalntwx.com/tx/0x9be536d3d5d173aa2c0660fa477926c2cf0ffc7b359b3249861b1542e172adb5).
+- **Metal and Airwallex reconcile together.** The Airwallex hold and the Metal mandate mirror each other. Each run checks ledger = on-chain settlement = Airwallex capture.
+- **Clearing is ready to switch on.** It sits behind `ClearingPort`, with an emulator that follows Metal's rules (signed running totals, epochs, finality before capture). Moving to Metal's live clearing changes no engine code.
+
+</td>
+</tr>
+</table>
 
 ## See it
 
