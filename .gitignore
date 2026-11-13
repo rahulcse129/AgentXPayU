@@ -11,3 +11,6 @@ demo-report.md
 next-env.d.ts
 *.tsbuildinfo
 data/
+
+# AWS CDK
+cdk.out/

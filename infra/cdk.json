@@ -1,0 +1,15 @@
+{
+  "app": "npx tsx bin/app.ts",
+  "context": {
+    "engineScript": "engine:offline",
+    "publicAccess": false,
+    "domainName": "margin.rahulsbuild.tech",
+    "hostedZoneId": "Z1046118QLH86ZI2BGQG",
+    "hostedZoneName": "rahulsbuild.tech",
+    "authEnabled": true,
+    "allowedCidrs": "",
+    "githubRepo": "rahulcse129/AgentXPayU",
+    "githubBranch": "main",
+    "githubOidcProviderArn": ""
+  }
+}

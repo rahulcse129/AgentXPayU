@@ -1,0 +1,66 @@
+name: Deploy to AWS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One deploy at a time: the service runs exactly one task.
+concurrency:
+  group: deploy-aws
+  cancel-in-progress: false
+
+permissions:
+  id-token: write # GitHub OIDC → AWS
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+
+  deploy:
+    needs: check
+    runs-on: ubuntu-latest
+    # Repo variables (Settings → Secrets and variables → Actions → Variables):
+    #   AWS_DEPLOY_ROLE_ARN  output of the MarginCi stack
+    #   AWS_REGION           e.g. ap-south-1
+    #   Optional overrides of infra/cdk.json: MARGIN_DOMAIN, MARGIN_ZONE_ID, MARGIN_ZONE_NAME,
+    #   MARGIN_ENGINE_SCRIPT, MARGIN_ALLOWED_CIDRS
+    if: ${{ vars.AWS_DEPLOY_ROLE_ARN != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: infra/package-lock.json
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - run: npm ci
+        working-directory: infra
+      - run: npm run typecheck
+        working-directory: infra
+      - name: cdk deploy
+        working-directory: infra
+        env:
+          # Only for CloudFront mode (no domain): "user:password". Only its hash reaches AWS.
+          MARGIN_BASIC_AUTH: ${{ secrets.MARGIN_BASIC_AUTH }}
+        # Each variable, when set, overrides the default in infra/cdk.json.
+        run: |
+          args=()
+          [ -n "${{ vars.MARGIN_DOMAIN }}" ]        && args+=(-c "domainName=${{ vars.MARGIN_DOMAIN }}")
+          [ -n "${{ vars.MARGIN_ZONE_ID }}" ]       && args+=(-c "hostedZoneId=${{ vars.MARGIN_ZONE_ID }}")
+          [ -n "${{ vars.MARGIN_ZONE_NAME }}" ]     && args+=(-c "hostedZoneName=${{ vars.MARGIN_ZONE_NAME }}")
+          [ -n "${{ vars.MARGIN_ENGINE_SCRIPT }}" ] && args+=(-c "engineScript=${{ vars.MARGIN_ENGINE_SCRIPT }}")
+          [ -n "${{ vars.MARGIN_ALLOWED_CIDRS }}" ] && args+=(-c "allowedCidrs=${{ vars.MARGIN_ALLOWED_CIDRS }}")
+          npx cdk deploy MarginApp --require-approval never "${args[@]}"

@@ -101,4 +101,9 @@ export interface Meta {
 
 export type ControlAction = "overrun_b" | "slow_lite" | "rogue_overquote" | "rogue_wrong_payee" | "rogue_junk" | "rogue_honest" | "mandate_test";
 
-export const ENGINE_URL = process.env.NEXT_PUBLIC_ENGINE_URL ?? "http://localhost:4100";
+/**
+ * Where the dashboard finds the engine. "same-origin": the engine is served under /api on this page's own
+ * host (the AWS deployment routes /api/* to the engine), so requests use relative URLs.
+ */
+const configuredEngineUrl = process.env.NEXT_PUBLIC_ENGINE_URL ?? "http://localhost:4100";
+export const ENGINE_URL = configuredEngineUrl === "same-origin" ? "" : configuredEngineUrl;
