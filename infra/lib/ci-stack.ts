@@ -15,6 +15,12 @@ export interface CiStackProps extends StackProps {
   githubBranch: string;
   /** If the account already has GitHub's OIDC provider (only one is allowed per account). */
   existingOidcProviderArn?: string;
+  /**
+   * Numeric GitHub IDs of the owner and repo. GitHub's token subject can carry them
+   * ("repo:owner@123/name@456:ref:..."), and they never change even if the repo is renamed or transferred.
+   */
+  githubOwnerId?: string;
+  githubRepoId?: string;
 }
 
 export class CiStack extends Stack {
@@ -27,13 +33,21 @@ export class CiStack extends Stack {
           clientIds: ["sts.amazonaws.com"],
         });
 
+    const ref = `ref:refs/heads/${props.githubBranch}`;
+    const subjects = [`repo:${props.githubRepo}:${ref}`];
+    if (props.githubOwnerId && props.githubRepoId) {
+      const [owner, name] = props.githubRepo.split("/");
+      subjects.push(`repo:${owner}@${props.githubOwnerId}/${name}@${props.githubRepoId}:${ref}`);
+    }
+
     const role = new iam.Role(this, "DeployRole", {
       roleName: "margin-github-deploy",
       description: `cdk deploy from ${props.githubRepo}@${props.githubBranch}`,
       assumedBy: new iam.WebIdentityPrincipal(provider.openIdConnectProviderArn, {
         StringEquals: {
           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-          "token.actions.githubusercontent.com:sub": `repo:${props.githubRepo}:ref:refs/heads/${props.githubBranch}`,
+          // Either subject format, but only this repo and branch.
+          "token.actions.githubusercontent.com:sub": subjects,
         },
       }),
     });

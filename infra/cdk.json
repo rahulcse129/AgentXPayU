@@ -10,6 +10,8 @@
     "allowedCidrs": "",
     "githubRepo": "rahulcse129/AgentXPayU",
     "githubBranch": "main",
+    "githubOwnerId": "147297671",
+    "githubRepoId": "1441244235",
     "githubOidcProviderArn": ""
   }
 }

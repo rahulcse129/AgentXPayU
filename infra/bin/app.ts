@@ -17,6 +17,8 @@ new CiStack(app, "MarginCi", {
   githubRepo: ctx("githubRepo"),
   githubBranch: ctx("githubBranch") || "main",
   existingOidcProviderArn: ctx("githubOidcProviderArn") || undefined,
+  githubOwnerId: ctx("githubOwnerId") ? String(ctx("githubOwnerId")) : undefined,
+  githubRepoId: ctx("githubRepoId") ? String(ctx("githubRepoId")) : undefined,
 });
 
 // Domain mode when all three are set; otherwise CloudFront mode (free https://dxxxx.cloudfront.net URL).
